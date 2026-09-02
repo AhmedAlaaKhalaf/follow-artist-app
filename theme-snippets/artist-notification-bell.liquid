@@ -1,0 +1,158 @@
+{%- comment -%}
+  Artist notification bell snippet.
+
+  Install once:
+    1. Copy this file to your theme → Snippets → artist-notification-bell.liquid
+    2. In the header (next to search / cart), add the shortcode:
+
+         {% render 'artist-notification-bell' %}
+
+  Optional:
+         {% render 'artist-notification-bell', proxy: '/apps/artist-follow', artist_base: '/artists' %}
+{%- endcomment -%}
+
+{%- liquid
+  assign afn_proxy = proxy | default: '/apps/artist-follow'
+  assign afn_artist_base = artist_base | default: '/artists'
+-%}
+
+{%- if customer -%}
+  <div class="afn" data-afn data-afn-proxy="{{ afn_proxy }}" data-afn-artist-base="{{ afn_artist_base }}">
+    <button type="button" class="afn__btn" data-afn-toggle aria-haspopup="true" aria-expanded="false" aria-label="Artist notifications">
+      <svg class="afn__icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path>
+        <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+      </svg>
+      <span class="afn__badge" data-afn-badge hidden>0</span>
+    </button>
+    <div class="afn__panel" data-afn-panel hidden role="dialog" aria-label="Artist notifications">
+      <div class="afn__head">
+        <strong>Notifications</strong>
+        <button type="button" class="afn__close" data-afn-close aria-label="Close">&times;</button>
+      </div>
+      <div class="afn__body" data-afn-body>
+        <p class="afn__muted">Loading&hellip;</p>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    .afn { position: relative; display: inline-flex; }
+    .afn__btn {
+      position: relative; display: inline-flex; align-items: center; justify-content: center;
+      width: 40px; height: 40px; padding: 0; color: inherit; background: transparent;
+      border: 0; cursor: pointer; -webkit-appearance: none; appearance: none;
+    }
+    .afn__btn:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 6px; }
+    .afn__icon { display: block; }
+    .afn__badge {
+      position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px;
+      font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+      color: #fff; background: #e03131; border-radius: 8px;
+    }
+    .afn__panel {
+      position: absolute; top: calc(100% + 8px); right: 0; z-index: 9999;
+      width: 320px; max-width: calc(100vw - 24px); max-height: 70vh; overflow: hidden auto;
+      color: #1a1a1a; background: #fff; border: 1px solid rgba(0,0,0,.12);
+      border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.18); text-align: left;
+    }
+    .afn__head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid rgba(0,0,0,.08); }
+    .afn__close { font-size: 20px; line-height: 1; color: inherit; background: transparent; border: 0; cursor: pointer; }
+    .afn__body { padding: 6px 0 10px; }
+    .afn__section { padding: 6px 0; }
+    .afn__h { margin: 0; padding: 8px 14px 4px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #6b6b6b; }
+    .afn__list { margin: 0; padding: 0; list-style: none; }
+    .afn__item { position: relative; }
+    .afn__item a { display: flex; gap: 10px; align-items: center; padding: 8px 14px; color: inherit; text-decoration: none; }
+    .afn__item a:hover { background: rgba(0,0,0,.04); }
+    .afn__thumb { flex: 0 0 auto; width: 44px; height: 44px; object-fit: cover; background: rgba(0,0,0,.06); border-radius: 6px; }
+    .afn__thumb--round { border-radius: 50%; }
+    .afn__txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .afn__title { font-size: 14px; font-weight: 500; }
+    .afn__sub { font-size: 12px; color: #6b6b6b; }
+    .afn__link { font-size: 12px; font-weight: 600; }
+    .afn__dot { position: absolute; top: 14px; left: 6px; width: 6px; height: 6px; background: #e03131; border-radius: 50%; }
+    .afn__muted { margin: 0; padding: 6px 14px 10px; font-size: 13px; color: #6b6b6b; }
+  </style>
+
+  <script>
+    (function () {
+      if (window.__afnInit) return; window.__afnInit = true;
+      function ready(fn){ if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn); else fn(); }
+      ready(function () {
+        var root = document.querySelector('[data-afn]');
+        if (!root || root.__ready) return; root.__ready = true;
+
+        var proxy = (root.getAttribute('data-afn-proxy') || '/apps/artist-follow').replace(/\/$/, '');
+        var artistBase = (root.getAttribute('data-afn-artist-base') || '/artists').replace(/\/$/, '');
+        var toggle = root.querySelector('[data-afn-toggle]');
+        var badge = root.querySelector('[data-afn-badge]');
+        var panel = root.querySelector('[data-afn-panel]');
+        var body = root.querySelector('[data-afn-body]');
+        var closeBtn = root.querySelector('[data-afn-close]');
+        var open = false, data = null, seenSent = false;
+
+        function api(path, opts){ return fetch(proxy + path, opts).then(function(r){ return r.json().catch(function(){ return {}; }); }); }
+        function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+        function setBadge(n){ if (!badge) return; if (n > 0){ badge.textContent = n > 99 ? '99+' : n; badge.hidden = false; } else { badge.hidden = true; } }
+
+        function render(){
+          var d = data || { artists: [], notifications: [] };
+          var html = '';
+          html += '<div class="afn__section"><h3 class="afn__h">New products</h3>';
+          if (d.notifications && d.notifications.length){
+            html += '<ul class="afn__list">';
+            d.notifications.forEach(function(n){
+              html += '<li class="afn__item">' + (n.is_new ? '<span class="afn__dot"></span>' : '') +
+                '<a href="' + esc(n.url) + '">' +
+                (n.image_url ? '<img class="afn__thumb" src="' + esc(n.image_url) + '" alt="" loading="lazy">' : '') +
+                '<span class="afn__txt"><span class="afn__title">' + esc(n.title) + '</span>' +
+                (n.artist_name ? '<span class="afn__sub">by ' + esc(n.artist_name) + '</span>' : '') +
+                '<span class="afn__link">View product &rarr;</span></span></a></li>';
+            });
+            html += '</ul>';
+          } else {
+            html += '<p class="afn__muted">No new products right now.</p>';
+          }
+          html += '</div>';
+
+          html += '<div class="afn__section"><h3 class="afn__h">Artists you follow</h3>';
+          if (d.artists && d.artists.length){
+            html += '<ul class="afn__list">';
+            d.artists.forEach(function(a){
+              var url = a.handle ? artistBase + '/' + encodeURIComponent(a.handle) : '#';
+              html += '<li class="afn__item"><a href="' + esc(url) + '">' +
+                (a.image_url ? '<img class="afn__thumb afn__thumb--round" src="' + esc(a.image_url) + '" alt="" loading="lazy">' : '') +
+                '<span class="afn__txt"><span class="afn__title">' + esc(a.name || a.handle) + '</span></span></a></li>';
+            });
+            html += '</ul>';
+          } else {
+            html += '<p class="afn__muted">You are not following any artists yet.</p>';
+          }
+          html += '</div>';
+          body.innerHTML = html;
+        }
+
+        function markSeen(){
+          if (seenSent || !data || !data.unseen_count) return;
+          seenSent = true;
+          api('/notifications', { method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:'{}' })
+            .then(function(){ setBadge(0); }).catch(function(){ seenSent = false; });
+        }
+
+        function show(){ open = true; panel.hidden = false; toggle.setAttribute('aria-expanded','true'); render(); markSeen(); }
+        function hide(){ open = false; panel.hidden = true; toggle.setAttribute('aria-expanded','false'); }
+
+        toggle.addEventListener('click', function(e){ e.stopPropagation(); open ? hide() : show(); });
+        if (closeBtn) closeBtn.addEventListener('click', function(e){ e.stopPropagation(); hide(); });
+        document.addEventListener('click', function(e){ if (open && !root.contains(e.target)) hide(); });
+        document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && open) hide(); });
+
+        api('/notifications', { method:'GET', headers:{'Accept':'application/json'}, credentials:'same-origin' })
+          .then(function(res){ data = res && res.logged_in ? res : { artists: [], notifications: [] }; setBadge(data.unseen_count || 0); })
+          .catch(function(){});
+      });
+    })();
+  </script>
+{%- endif -%}

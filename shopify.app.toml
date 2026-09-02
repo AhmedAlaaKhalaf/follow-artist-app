@@ -1,0 +1,71 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "96d48f2525369cf077fb98f96b46b1b3"
+application_url = "https://example.com"
+embedded = true
+name = "follow-artist-app"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+# read_customers / write_customers: read + write the customer `custom.followed_artists`
+#   metafield and manage its metafield definition (owner type CUSTOMER).
+# read_metaobjects / write_metaobjects: read Artist metaobjects to validate follows.
+#   (write_metaobjects is inherited from the template; only read is required here.)
+# write_metaobject_definitions: template-managed app metaobject definition.
+# write_products: template demo product generator (read_products would suffice for
+#   the Follow feature, which only reads the product custom.artist relationship).
+scopes = "write_products,write_metaobjects,write_metaobject_definitions,read_customers,write_customers"
+
+[product.metafields.app.demo_info]
+type = "single_line_text_field"
+name = "Demo Source Info"
+description = "Tracks products created by the Shopify app template for development"
+
+  [product.metafields.app.demo_info.access]
+  admin = "merchant_read_write"
+
+[metaobjects.app.example]
+name = "Example"
+description = "An example metaobject definition created by this template"
+
+  [metaobjects.app.example.access]
+  admin = "merchant_read_write"
+
+[metaobjects.app.example.fields.title]
+name = "Title"
+type = "single_line_text_field"
+required = true
+
+[metaobjects.app.example.fields.description]
+name = "Description"
+type = "multi_line_text_field"
+
+[webhooks]
+api_version = "2026-10"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
+
+# App Proxy for the storefront "Follow Artist" endpoints.
+# Storefront path  ->  proxied to
+#   /apps/artist-follow/status   ->  {url}/status
+#   /apps/artist-follow/follow   ->  {url}/follow
+#   /apps/artist-follow/unfollow ->  {url}/unfollow
+# `url` starts with `application_url`, so `shopify app dev` swaps the origin for the
+# dev tunnel automatically (the "/proxy" path is preserved).
+[app_proxy]
+url = "https://example.com/proxy"
+subpath = "artist-follow"
+prefix = "apps"
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true

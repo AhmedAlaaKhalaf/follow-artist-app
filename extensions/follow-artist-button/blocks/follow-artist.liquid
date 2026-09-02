@@ -1,0 +1,109 @@
+{%- comment -%}
+  Follow Artist app block.
+
+  Works on any Artist metaobject template. The current artist is detected
+  automatically from the metaobject being rendered — no Artist ID is ever
+  configured by the merchant.
+
+  - metaobject.system.handle / metaobject.system.type identify the artist.
+  - customer  => whether a customer is logged in.
+  - The backend (App Proxy) resolves the real metaobject GID and the customer,
+    so the browser never sends (and cannot spoof) a customer id.
+{%- endcomment -%}
+
+{%- assign artist_handle = metaobject.system.handle -%}
+{%- assign artist_type = metaobject.system.type -%}
+
+{%- if artist_handle != blank and artist_type != blank -%}
+  {%- assign proxy_base = block.settings.proxy_base | default: '/apps/artist-follow' -%}
+  {%- capture return_url -%}{{ request.path }}{%- endcapture -%}
+
+  <div
+    class="artist-follow"
+    data-artist-follow
+    data-proxy-base="{{ proxy_base }}"
+    data-artist-type="{{ artist_type | escape }}"
+    data-artist-handle="{{ artist_handle | escape }}"
+    data-logged-in="{% if customer %}true{% else %}false{% endif %}"
+    data-login-url="{{ routes.account_login_url }}?return_url={{ return_url | url_encode }}"
+    data-label-follow="{{ block.settings.label_follow | escape }}"
+    data-label-follow-cta="{{ block.settings.label_follow_cta | escape }}"
+    data-label-following="{{ block.settings.label_following | escape }}"
+    data-label-follow-loading="{{ block.settings.label_follow_loading | escape }}"
+    data-label-unfollow-loading="{{ block.settings.label_unfollow_loading | escape }}"
+    data-label-error="{{ block.settings.label_error | escape }}"
+    {{ block.shopify_attributes }}
+  >
+    <button
+      type="button"
+      class="artist-follow__button"
+      data-artist-follow-button
+      aria-live="polite"
+      disabled
+    >
+      {{ block.settings.label_follow | default: 'Follow Artist' }}
+    </button>
+    <p class="artist-follow__error" data-artist-follow-error role="alert" hidden></p>
+  </div>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Follow Artist",
+  "target": "section",
+  "enabled_on": {
+    "templates": ["metaobject"]
+  },
+  "stylesheet": "follow-artist.css",
+  "javascript": "follow-artist.js",
+  "settings": [
+    {
+      "type": "paragraph",
+      "content": "Shows a Follow button on Artist pages. The current artist is detected automatically."
+    },
+    {
+      "type": "text",
+      "id": "proxy_base",
+      "label": "App Proxy base path",
+      "info": "Must match the app's App Proxy (prefix + subpath).",
+      "default": "/apps/artist-follow"
+    },
+    {
+      "type": "text",
+      "id": "label_follow",
+      "label": "Label — logged out",
+      "default": "Follow Artist"
+    },
+    {
+      "type": "text",
+      "id": "label_follow_cta",
+      "label": "Label — not following",
+      "default": "+ Follow Artist"
+    },
+    {
+      "type": "text",
+      "id": "label_following",
+      "label": "Label — following",
+      "default": "✓ Following"
+    },
+    {
+      "type": "text",
+      "id": "label_follow_loading",
+      "label": "Label — following in progress",
+      "default": "Following…"
+    },
+    {
+      "type": "text",
+      "id": "label_unfollow_loading",
+      "label": "Label — unfollowing in progress",
+      "default": "Unfollowing…"
+    },
+    {
+      "type": "text",
+      "id": "label_error",
+      "label": "Error message",
+      "default": "Something went wrong. Please try again."
+    }
+  ]
+}
+{% endschema %}

@@ -1,0 +1,56 @@
+/*
+ * Minimal, theme-friendly styles for the Follow Artist button.
+ * Intentionally light-touch so merchants can restyle via their theme.
+ * Everything is scoped under .artist-follow.
+ */
+
+.artist-follow {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.artist-follow__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  min-height: 44px; /* comfortable tap target on mobile */
+  padding: 0.6em 1.2em;
+  font: inherit;
+  line-height: 1.2;
+  color: inherit;
+  cursor: pointer;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.artist-follow__button:hover {
+  opacity: 0.85;
+}
+
+.artist-follow__button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.artist-follow__button[disabled] {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* Subtle filled look for the "following" state, without hurting contrast. */
+.artist-follow__button.is-following {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.artist-follow__error {
+  margin: 0;
+  font-size: 0.875em;
+  color: #b3261e;
+}
