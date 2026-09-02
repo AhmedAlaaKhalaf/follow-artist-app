@@ -3,20 +3,36 @@ import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 // Related: https://github.com/remix-run/remix/issues/2835#issuecomment-1144102176
-// Replace the HOST env var with SHOPIFY_APP_URL so that it doesn't break the Vite server.
-// The CLI will eventually stop passing in HOST,
-// so we can remove this workaround after the next major release.
+// Shopify CLI may pass HOST as a tunnel URL. Only remap it when it looks like a
+// real URL/hostname — never when HOST is a bind address like 0.0.0.0 (Railway).
+const hostEnv = process.env.HOST;
+const isBindAddress =
+  !hostEnv ||
+  hostEnv === "0.0.0.0" ||
+  hostEnv === "::" ||
+  hostEnv === "*";
+
 if (
-  process.env.HOST &&
+  hostEnv &&
+  !isBindAddress &&
   (!process.env.SHOPIFY_APP_URL ||
-    process.env.SHOPIFY_APP_URL === process.env.HOST)
+    process.env.SHOPIFY_APP_URL === hostEnv)
 ) {
-  process.env.SHOPIFY_APP_URL = process.env.HOST;
+  process.env.SHOPIFY_APP_URL = hostEnv;
   delete process.env.HOST;
 }
 
-const host = new URL(process.env.SHOPIFY_APP_URL || "http://localhost")
-  .hostname;
+function appHostname() {
+  const raw = process.env.SHOPIFY_APP_URL || "http://localhost";
+  try {
+    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    return new URL(withProtocol).hostname;
+  } catch {
+    return "localhost";
+  }
+}
+
+const host = appHostname();
 let hmrConfig;
 
 if (host === "localhost") {
