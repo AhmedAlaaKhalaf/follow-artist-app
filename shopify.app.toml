@@ -65,6 +65,5 @@ subpath = "artist-follow"
 prefix = "apps"
 
 [build]
-include_config_on_deploy = true
 # Keep production Railway URLs when running `shopify app dev` locally.
 automatically_update_urls_on_dev = false
