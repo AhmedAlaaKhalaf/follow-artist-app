@@ -88,21 +88,93 @@ const CONFIG_QUERY = `#graphql
 
 const METAOBJECT_DEFINITION_BY_TYPE_QUERY = `#graphql
   query MetaobjectDefinitionByType($type: String!) {
-    metaobjectDefinitionByType(type: $type) { id name type }
+    metaobjectDefinitionByType(type: $type) {
+      id
+      name
+      type
+      access { admin storefront }
+      capabilities {
+        publishable { enabled }
+        translatable { enabled }
+        renderable { enabled }
+        onlineStore { enabled data { urlHandle } }
+      }
+      fieldDefinitions { key name type { name } required }
+    }
   }
 `;
 
 const METAOBJECT_DEFINITIONS_QUERY = `#graphql
   query ArtistMetaobjectDefinitions {
     metaobjectDefinitions(first: 100) {
-      nodes { id name type }
+      nodes {
+        id
+        name
+        type
+        access { admin storefront }
+        capabilities {
+          publishable { enabled }
+          translatable { enabled }
+          renderable { enabled }
+          onlineStore { enabled data { urlHandle } }
+        }
+      }
     }
   }
 `;
 
 const METAOBJECT_DEFINITION_BY_ID_QUERY = `#graphql
   query MetaobjectDefinition($id: ID!) {
-    metaobjectDefinition(id: $id) { id name type }
+    metaobjectDefinition(id: $id) {
+      id
+      name
+      type
+      access { admin storefront }
+      capabilities {
+        publishable { enabled }
+        translatable { enabled }
+        renderable { enabled }
+        onlineStore { enabled data { urlHandle } }
+      }
+    }
+  }
+`;
+
+const CREATE_ARTIST_DEFINITION_MUTATION = `#graphql
+  mutation CreateAppArtistDefinition($definition: MetaobjectDefinitionCreateInput!) {
+    metaobjectDefinitionCreate(definition: $definition) {
+      metaobjectDefinition {
+        id
+        name
+        type
+        capabilities {
+          publishable { enabled }
+          translatable { enabled }
+          renderable { enabled }
+          onlineStore { enabled data { urlHandle } }
+        }
+      }
+      userErrors { field message code }
+    }
+  }
+`;
+
+const UPDATE_ARTIST_DEFINITION_MUTATION = `#graphql
+  mutation UpdateAppArtistDefinition($id: ID!, $definition: MetaobjectDefinitionUpdateInput!) {
+    metaobjectDefinitionUpdate(id: $id, definition: $definition) {
+      metaobjectDefinition {
+        id
+        name
+        type
+        capabilities {
+          publishable { enabled }
+          translatable { enabled }
+          renderable { enabled }
+          onlineStore { enabled data { urlHandle } }
+        }
+      }
+      userErrors { field message code }
+    }
   }
 `;
 
@@ -113,13 +185,25 @@ function isAppArtistType(type) {
   return t === APP_ARTIST_METAOBJECT_TYPE || /^app--[a-f0-9]+--artist$/.test(t);
 }
 
+function artistOptionsSummary(definition) {
+  const caps = definition?.capabilities || {};
+  return {
+    publishable: Boolean(caps.publishable?.enabled),
+    translatable: Boolean(caps.translatable?.enabled),
+    renderable: Boolean(caps.renderable?.enabled),
+    onlineStore: Boolean(caps.onlineStore?.enabled),
+    storefront: definition?.access?.storefront === "PUBLIC_READ",
+    urlHandle: caps.onlineStore?.data?.urlHandle || null,
+  };
+}
+
 /**
  * Find the Artist metaobject definition.
- * Prefers the app-owned `$app:artist` from shopify.app.toml.
+ * Prefers the app-owned `$app:artist`.
  * Falls back to Product `custom.artist` validation, then merchant type `artist`.
  */
 export async function resolveArtistDefinition(admin, config) {
-  // 1. App-owned definition created by this app (preferred).
+  // 1. App-owned definition (preferred).
   const byType = await adminGraphql(admin, METAOBJECT_DEFINITION_BY_TYPE_QUERY, {
     type: APP_ARTIST_METAOBJECT_TYPE,
   });
@@ -173,6 +257,14 @@ export async function getConfigStatus(admin) {
 
   const artistDefinition = await resolveArtistDefinition(admin, config);
   const usingAppArtist = isAppArtistType(artistDefinition?.type);
+  const options = artistOptionsSummary(artistDefinition);
+  const optionsReady =
+    usingAppArtist &&
+    options.publishable &&
+    options.translatable &&
+    options.renderable &&
+    options.onlineStore &&
+    options.storefront;
 
   const productRefId = productArtist?.validations?.find(
     (v) => v.name === "metaobject_definition_id",
@@ -199,6 +291,8 @@ export async function getConfigStatus(admin) {
     artistMetaobject: {
       ok: Boolean(artistDefinition),
       usingAppArtist,
+      optionsReady,
+      options,
       expectedType: APP_ARTIST_METAOBJECT_TYPE,
       definition: artistDefinition,
     },
@@ -209,7 +303,6 @@ export async function getConfigStatus(admin) {
     },
     customerFollowedMetafield: {
       exists: Boolean(customerFollowed),
-      // present but wrong type => configuration error, must not be auto-changed
       ok: Boolean(customerFollowed) && customerTypeOk,
       typeMismatch: Boolean(customerFollowed) && !customerTypeOk,
       pointsAtAppArtist: customerPointsAtAppArtist,
@@ -217,6 +310,126 @@ export async function getConfigStatus(admin) {
       definition: customerFollowed,
     },
   };
+}
+
+/** Create or update `$app:artist` with the screenshot fields + metaobject options. */
+export async function ensureArtistMetaobjectDefinition(admin) {
+  const existing = await adminGraphql(admin, METAOBJECT_DEFINITION_BY_TYPE_QUERY, {
+    type: APP_ARTIST_METAOBJECT_TYPE,
+  });
+  let definition = existing?.metaobjectDefinitionByType;
+
+  if (!definition) {
+    const listed = await adminGraphql(admin, METAOBJECT_DEFINITIONS_QUERY, {});
+    definition =
+      (listed?.metaobjectDefinitions?.nodes ?? []).find((n) =>
+        isAppArtistType(n.type),
+      ) || null;
+  }
+
+  const desiredCapabilities = {
+    publishable: { enabled: true },
+    translatable: { enabled: true },
+    renderable: {
+      enabled: true,
+      data: { metaTitleKey: "name", metaDescriptionKey: "bio" },
+    },
+    onlineStore: {
+      enabled: true,
+      data: { urlHandle: "artists" },
+    },
+  };
+
+  if (!definition) {
+    const createInput = {
+      name: "Artist",
+      type: APP_ARTIST_METAOBJECT_TYPE,
+      description: "Artist profile used by the Follow Artist feature",
+      displayNameKey: "name",
+      access: {
+        admin: "MERCHANT_READ_WRITE",
+        storefront: "PUBLIC_READ",
+      },
+      capabilities: desiredCapabilities,
+      fieldDefinitions: [
+        {
+          key: "name",
+          name: "Name",
+          type: "single_line_text_field",
+          required: true,
+        },
+        {
+          key: "image",
+          name: "Image",
+          type: "file_reference",
+          required: true,
+          validations: [{ name: "file_type_options", value: '["Image"]' }],
+        },
+        {
+          key: "bio",
+          name: "Bio",
+          type: "multi_line_text_field",
+          required: true,
+        },
+        {
+          key: "collection",
+          name: "Collection",
+          type: "collection_reference",
+          required: true,
+        },
+      ],
+    };
+
+    const data = await adminGraphql(admin, CREATE_ARTIST_DEFINITION_MUTATION, {
+      definition: createInput,
+    });
+    const result = data.metaobjectDefinitionCreate;
+    if (result.userErrors?.length) {
+      return {
+        status: "error",
+        reason: "artist_create_failed",
+        message: result.userErrors.map((e) => e.message).join("; "),
+      };
+    }
+    return { status: "created", definition: result.metaobjectDefinition };
+  }
+
+  // Exists — enable missing options (Online Store especially).
+  const options = artistOptionsSummary(definition);
+  if (
+    options.publishable &&
+    options.translatable &&
+    options.renderable &&
+    options.onlineStore &&
+    options.storefront
+  ) {
+    return { status: "exists", definition };
+  }
+
+  const data = await adminGraphql(admin, UPDATE_ARTIST_DEFINITION_MUTATION, {
+    id: definition.id,
+    definition: {
+      access: {
+        admin: "MERCHANT_READ_WRITE",
+        storefront: "PUBLIC_READ",
+      },
+      capabilities: desiredCapabilities,
+    },
+  });
+  const result = data.metaobjectDefinitionUpdate;
+  if (result.userErrors?.length) {
+    const managed = result.userErrors.some(
+      (e) => e.code === "APP_CONFIG_MANAGED" || /app configuration/i.test(e.message),
+    );
+    return {
+      status: "error",
+      reason: managed ? "artist_config_managed" : "artist_update_failed",
+      message: managed
+        ? "Artist is still managed by shopify.app.toml. Remove [metaobjects.app.artist] from the TOML, run `shopify app deploy --allow-updates --allow-deletes`, then click Run setup again."
+        : result.userErrors.map((e) => e.message).join("; "),
+    };
+  }
+  return { status: "updated", definition: result.metaobjectDefinition };
 }
 
 const CREATE_DEFINITION_MUTATION = `#graphql
@@ -234,18 +447,64 @@ const CREATE_DEFINITION_MUTATION = `#graphql
   }
 `;
 
+/** Create Product `custom.artist` referencing the app Artist, if missing. */
+export async function ensureProductArtistMetafield(admin, artistDefinition) {
+  if (!artistDefinition?.id) {
+    return {
+      status: "error",
+      reason: "artist_definition_missing",
+      message: "Artist metaobject must exist before creating Product custom.artist.",
+    };
+  }
+
+  const status = await getConfigStatus(admin);
+  if (status.productArtistMetafield.pointsAtAppArtist) {
+    return { status: "exists", definition: status.productArtistMetafield.definition };
+  }
+
+  if (status.productArtistMetafield.ok && !status.productArtistMetafield.pointsAtAppArtist) {
+    return {
+      status: "error",
+      reason: "product_artist_wrong_reference",
+      message:
+        'Product metafield "custom.artist" already exists but points at a different metaobject. In Settings → Custom data → Products → artist, change the reference to the app Artist ($app:artist), or delete that definition and click Run setup again.',
+    };
+  }
+
+  const definition = {
+    name: "Artist",
+    namespace: PRODUCT_ARTIST_METAFIELD.namespace,
+    key: PRODUCT_ARTIST_METAFIELD.key,
+    ownerType: "PRODUCT",
+    type: "metaobject_reference",
+    description: "Artist who created this product.",
+    validations: [
+      { name: "metaobject_definition_id", value: artistDefinition.id },
+    ],
+  };
+
+  const data = await adminGraphql(admin, CREATE_DEFINITION_MUTATION, { definition });
+  const result = data.metafieldDefinitionCreate;
+  if (result.userErrors?.length) {
+    const taken = result.userErrors.some((e) => e.code === "TAKEN");
+    if (taken) return { status: "exists" };
+    return {
+      status: "error",
+      reason: "product_create_failed",
+      message: result.userErrors.map((e) => e.message).join("; "),
+    };
+  }
+  return { status: "created", definition: result.createdDefinition };
+}
+
 /**
  * Idempotently ensure the `custom.followed_artists` customer metafield
  * definition exists with the correct type and Artist reference.
- *
- * Returns one of:
- *   { status: "exists" | "created", definition }
- *   { status: "error", reason, message }
  */
-export async function ensureCustomerFollowedArtistsDefinition(admin) {
+export async function ensureCustomerFollowedArtistsDefinition(admin, artistDefinition) {
   const status = await getConfigStatus(admin);
+  const artist = artistDefinition || status.artistMetaobject.definition;
 
-  // Existing but incompatible type — never silently modify.
   if (status.customerFollowedMetafield.typeMismatch) {
     return {
       status: "error",
@@ -254,17 +513,30 @@ export async function ensureCustomerFollowedArtistsDefinition(admin) {
     };
   }
 
-  if (status.customerFollowedMetafield.ok) {
+  if (
+    status.customerFollowedMetafield.ok &&
+    status.customerFollowedMetafield.pointsAtAppArtist
+  ) {
     return { status: "exists", definition: status.customerFollowedMetafield.definition };
   }
 
-  // We need the Artist metaobject definition to scope the reference.
-  if (!status.artistMetaobject.ok) {
+  if (
+    status.customerFollowedMetafield.ok &&
+    !status.customerFollowedMetafield.pointsAtAppArtist
+  ) {
+    return {
+      status: "error",
+      reason: "customer_wrong_reference",
+      message:
+        'Customer metafield "custom.followed_artists" already exists but points at a different Artist. Delete it in Settings → Custom data → Customers, then click Run setup again.',
+    };
+  }
+
+  if (!artist?.id) {
     return {
       status: "error",
       reason: "artist_definition_missing",
-      message:
-        `Could not locate the app Artist metaobject (${APP_ARTIST_METAOBJECT_TYPE}). Deploy the app so shopify.app.toml creates it, then try again.`,
+      message: `Could not locate the app Artist metaobject (${APP_ARTIST_METAOBJECT_TYPE}). Click Run setup to create it.`,
     };
   }
 
@@ -275,11 +547,8 @@ export async function ensureCustomerFollowedArtistsDefinition(admin) {
     ownerType: CUSTOMER_METAFIELD.ownerType,
     type: CUSTOMER_METAFIELD.type,
     description: "Artists this customer follows (used by Shopify Flow).",
-    // Note: `access` is intentionally omitted. Shopify rejects an explicit
-    // admin access control here and applies the correct default for a `custom`
-    // customer metafield (merchant + Flow can read it).
     validations: [
-      { name: "metaobject_definition_id", value: status.artistMetaobject.definition.id },
+      { name: "metaobject_definition_id", value: artist.id },
     ],
   };
 
@@ -287,11 +556,8 @@ export async function ensureCustomerFollowedArtistsDefinition(admin) {
   const result = data.metafieldDefinitionCreate;
 
   if (result.userErrors?.length) {
-    // "TAKEN" means another concurrent setup created it — treat as success.
     const taken = result.userErrors.some((e) => e.code === "TAKEN");
-    if (taken) {
-      return { status: "exists" };
-    }
+    if (taken) return { status: "exists" };
     return {
       status: "error",
       reason: "create_failed",
@@ -300,6 +566,44 @@ export async function ensureCustomerFollowedArtistsDefinition(admin) {
   }
 
   return { status: "created", definition: result.createdDefinition };
+}
+
+/**
+ * Full setup: Artist options → Product custom.artist → Customer followed_artists.
+ */
+export async function runArtistFollowSetup(admin) {
+  const steps = [];
+
+  const artistResult = await ensureArtistMetaobjectDefinition(admin);
+  steps.push({ step: "artist", ...artistResult });
+  if (artistResult.status === "error") {
+    return { status: "error", message: artistResult.message, steps };
+  }
+
+  const artistDefinition = artistResult.definition;
+  const productResult = await ensureProductArtistMetafield(admin, artistDefinition);
+  steps.push({ step: "product", ...productResult });
+  if (productResult.status === "error") {
+    return { status: "error", message: productResult.message, steps };
+  }
+
+  const customerResult = await ensureCustomerFollowedArtistsDefinition(
+    admin,
+    artistDefinition,
+  );
+  steps.push({ step: "customer", ...customerResult });
+  if (customerResult.status === "error") {
+    return { status: "error", message: customerResult.message, steps };
+  }
+
+  const anyCreated = steps.some((s) => s.status === "created" || s.status === "updated");
+  return {
+    status: anyCreated ? "created" : "exists",
+    message: anyCreated
+      ? "Setup completed: Artist options, Product custom.artist, and Customer followed_artists are ready."
+      : "Everything was already configured.",
+    steps,
+  };
 }
 
 /* -------------------------------------------------------------------------- */

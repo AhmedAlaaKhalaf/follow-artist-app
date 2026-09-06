@@ -10,10 +10,8 @@ name = "follow-artist-app"
 # read_customers / write_customers: read + write the customer `custom.followed_artists`
 #   metafield and manage its metafield definition (owner type CUSTOMER).
 # read_metaobjects / write_metaobjects: read Artist metaobjects to validate follows.
-#   (write_metaobjects is inherited from the template; only read is required here.)
-# write_metaobject_definitions: template-managed app metaobject definition.
-# write_products: template demo product generator (read_products would suffice for
-#   the Follow feature, which only reads the product custom.artist relationship).
+# write_metaobject_definitions: create/update the app Artist definition (incl. Online Store).
+# write_products: create Product custom.artist metafield definition when missing.
 scopes = "write_products,write_metaobjects,write_metaobject_definitions,read_customers,write_customers"
 
 [product.metafields.app.demo_info]
@@ -24,52 +22,9 @@ description = "Tracks products created by the Shopify app template for developme
   [product.metafields.app.demo_info.access]
   admin = "merchant_read_write"
 
-# App-owned Artist definition (type = $app:artist).
-# Flip the options below to true/false, then run `shopify app deploy`.
-# Note: "Publish entries as web pages" (Online Store URL/template) cannot be
-# set in TOML — enable that in Admin → Custom data → Artist → Metaobject options.
-[metaobjects.app.artist]
-name = "Artist"
-description = "Artist profile used by the Follow Artist feature"
-display_name_field = "name"
-
-  [metaobjects.app.artist.access]
-  admin = "merchant_read_write"
-  # Storefronts API access
-  storefront = "public_read"
-  # Customer Account API access — use "read" or omit / set "none"
-  # customer_account = "none"
-
-  [metaobjects.app.artist.capabilities]
-  # Active-draft status
-  publishable = true
-  # Translations
-  translatable = true
-  # SEO / renderable (page title + meta description fields)
-  renderable = true
-
-[metaobjects.app.artist.fields.name]
-name = "Name"
-type = "single_line_text_field"
-required = true
-
-[metaobjects.app.artist.fields.image]
-name = "Image"
-type = "file_reference"
-required = true
-
-  [metaobjects.app.artist.fields.image.validations]
-  file_type_options = [ "Image" ]
-
-[metaobjects.app.artist.fields.bio]
-name = "Bio"
-type = "multi_line_text_field"
-required = true
-
-[metaobjects.app.artist.fields.collection]
-name = "Collection"
-type = "collection_reference"
-required = true
+# Artist metaobject ($app:artist) is created by the app's Setup action via Admin
+# GraphQL (not TOML). TOML cannot enable "Publish entries as web pages" / Online
+# Store — GraphQL can. Open Apps → Artist Follow → Run setup.
 
 [webhooks]
 api_version = "2026-10"
@@ -96,5 +51,6 @@ subpath = "artist-follow"
 prefix = "apps"
 
 [build]
-# Keep production Railway URLs when running `shopify app dev` locally.
+# Keep production Railway URLs when running `npm run dev` locally.
 automatically_update_urls_on_dev = false
+include_config_on_deploy = true

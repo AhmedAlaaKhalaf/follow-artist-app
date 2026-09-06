@@ -28,7 +28,8 @@ export default function Home() {
 
   const artistOk =
     Boolean(status?.artistMetaobject?.ok) &&
-    Boolean(status?.artistMetaobject?.usingAppArtist);
+    Boolean(status?.artistMetaobject?.usingAppArtist) &&
+    Boolean(status?.artistMetaobject?.optionsReady);
   const productOk =
     Boolean(status?.productArtistMetafield?.ok) &&
     Boolean(status?.productArtistMetafield?.pointsAtAppArtist);

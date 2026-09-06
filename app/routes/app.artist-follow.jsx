@@ -4,8 +4,8 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import {
-  ensureCustomerFollowedArtistsDefinition,
   getConfigStatus,
+  runArtistFollowSetup,
 } from "../lib/artist-follow.server";
 import {
   APP_ARTIST_METAOBJECT_TYPE,
@@ -19,6 +19,8 @@ const EMPTY_STATUS = {
   artistMetaobject: {
     ok: false,
     usingAppArtist: false,
+    optionsReady: false,
+    options: {},
     expectedType: APP_ARTIST_METAOBJECT_TYPE,
     definition: null,
   },
@@ -43,7 +45,10 @@ export const loader = async ({ request }) => {
     const status = await getConfigStatus(admin);
     return { status, loadError: null };
   } catch (error) {
-    console.error("[artist-follow] admin loader error", { message: error?.message });
+    console.error("[artist-follow] admin loader error", {
+      message: error?.message,
+      details: error?.details,
+    });
     return { status: EMPTY_STATUS, loadError: describeError(error) };
   }
 };
@@ -51,14 +56,28 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
   try {
-    const result = await ensureCustomerFollowedArtistsDefinition(admin);
+    const result = await runArtistFollowSetup(admin);
     const status = await getConfigStatus(admin);
     return { result, status, loadError: null };
   } catch (error) {
-    console.error("[artist-follow] admin action error", { message: error?.message });
+    console.error("[artist-follow] admin action error", {
+      message: error?.message,
+      details: error?.details,
+      stack: error?.stack,
+    });
+    let status = EMPTY_STATUS;
+    try {
+      status = await getConfigStatus(admin);
+    } catch {
+      // keep EMPTY_STATUS
+    }
     return {
-      result: { status: "error", reason: "request_failed", message: describeError(error) },
-      status: EMPTY_STATUS,
+      result: {
+        status: "error",
+        reason: "request_failed",
+        message: describeError(error),
+      },
+      status,
       loadError: null,
     };
   }
@@ -86,37 +105,43 @@ export default function ArtistFollowSetup() {
   const fetcher = useFetcher();
   const shopify = useAppBridge();
 
-  const status = fetcher.data?.status ?? initialStatus;
+  const status = fetcher.data?.status ?? initialStatus ?? EMPTY_STATUS;
   const result = fetcher.data?.result;
   const loadError = fetcher.data?.loadError ?? initialLoadError;
   const isSubmitting = fetcher.state !== "idle";
 
-  const artistOk = status.artistMetaobject.ok;
-  const usingAppArtist = Boolean(status.artistMetaobject.usingAppArtist);
-  const productOk = status.productArtistMetafield.ok;
+  const artistOk = Boolean(status.artistMetaobject?.ok);
+  const usingAppArtist = Boolean(status.artistMetaobject?.usingAppArtist);
+  const optionsReady = Boolean(status.artistMetaobject?.optionsReady);
+  const options = status.artistMetaobject?.options || {};
+  const productOk = Boolean(status.productArtistMetafield?.ok);
   const productPointsAtApp = Boolean(
-    status.productArtistMetafield.pointsAtAppArtist,
+    status.productArtistMetafield?.pointsAtAppArtist,
   );
-  const customerOk = status.customerFollowedMetafield.ok;
+  const customerOk = Boolean(status.customerFollowedMetafield?.ok);
   const customerPointsAtApp = Boolean(
-    status.customerFollowedMetafield.pointsAtAppArtist,
+    status.customerFollowedMetafield?.pointsAtAppArtist,
   );
-  const typeMismatch = status.customerFollowedMetafield.typeMismatch;
+  const typeMismatch = Boolean(status.customerFollowedMetafield?.typeMismatch);
   const artistType =
-    status.artistMetaobject.definition?.type || APP_ARTIST_METAOBJECT_TYPE;
+    status.artistMetaobject?.definition?.type || APP_ARTIST_METAOBJECT_TYPE;
   const ready =
     artistOk &&
     usingAppArtist &&
+    optionsReady &&
     productOk &&
     productPointsAtApp &&
     customerOk &&
     customerPointsAtApp;
 
   useEffect(() => {
-    if (result?.status === "created") {
-      shopify.toast.show("Customer metafield definition created");
-    } else if (result?.status === "error") {
-      shopify.toast.show("Setup could not be completed", { isError: true });
+    if (!result) return;
+    if (result.status === "created" || result.status === "exists") {
+      shopify.toast.show(result.message || "Setup complete");
+    } else if (result.status === "error") {
+      shopify.toast.show(result.message || "Setup could not be completed", {
+        isError: true,
+      });
     }
   }, [result, shopify]);
 
@@ -128,9 +153,9 @@ export default function ArtistFollowSetup() {
         slot="primary-action"
         onClick={runSetup}
         {...(isSubmitting ? { loading: true } : {})}
-        {...(customerOk ? { variant: "secondary" } : {})}
+        {...(ready ? { variant: "secondary" } : {})}
       >
-        {customerOk ? "Re-check configuration" : "Create customer metafield"}
+        {ready ? "Re-check configuration" : "Run setup"}
       </s-button>
 
       {loadError && (
@@ -138,9 +163,8 @@ export default function ArtistFollowSetup() {
           <s-banner tone="critical">
             <s-paragraph>{loadError}</s-paragraph>
             <s-paragraph>
-              If you just changed the app&apos;s access scopes, reinstall the app
-              (stop and restart <s-text fontWeight="bold">npm run dev</s-text>,
-              then reopen and approve the new permissions).
+              If you just changed the app&apos;s access scopes, reopen the app
+              and approve the new permissions.
             </s-paragraph>
           </s-banner>
         </s-section>
@@ -150,15 +174,16 @@ export default function ArtistFollowSetup() {
         <s-stack direction="block" gap="base">
           {renderCheck(
             artistOk && usingAppArtist,
-            `Artist metaobject found (${artistType})`,
+            `Artist metaobject (${artistType})`,
           )}
+          {renderCheck(optionsReady, "Artist metaobject options enabled")}
           {renderCheck(
             productOk && productPointsAtApp,
-            "Product custom.artist references app Artist",
+            "Product custom.artist → app Artist",
           )}
           {renderCheck(
             customerOk && customerPointsAtApp,
-            "Customer custom.followed_artists references app Artist",
+            "Customer custom.followed_artists → app Artist",
           )}
           {renderCheck(true, `App Proxy configured (${PROXY_PATH})`)}
         </s-stack>
@@ -170,75 +195,27 @@ export default function ArtistFollowSetup() {
         </s-box>
       </s-section>
 
-      {!artistOk && (
-        <s-section heading="Artist metaobject missing">
+      {usingAppArtist && !optionsReady && (
+        <s-section heading="Artist options">
+          <s-stack direction="block" gap="tight">
+            {renderCheck(options.publishable, "Active-draft status")}
+            {renderCheck(options.translatable, "Translations")}
+            {renderCheck(options.renderable, "Renderable / SEO")}
+            {renderCheck(options.onlineStore, "Publish as web pages (Online Store)")}
+            {renderCheck(options.storefront, "Storefronts API access")}
+          </s-stack>
           <s-paragraph>
-            Deploy the app so{" "}
-            <s-text fontWeight="bold">shopify.app.toml</s-text> creates{" "}
-            <s-text fontWeight="bold">{APP_ARTIST_METAOBJECT_TYPE}</s-text>.
-            Then reopen this page.
+            Click <s-text fontWeight="bold">Run setup</s-text> to enable these.
+            Online Store pages will use URL handle{" "}
+            <s-text fontWeight="bold">/artists/…</s-text>.
           </s-paragraph>
         </s-section>
       )}
 
-      {artistOk && !usingAppArtist && (
-        <s-section heading="Wrong Artist type">
-          <s-banner tone="warning">
-            <s-paragraph>
-              Found Artist type{" "}
-              <s-text fontWeight="bold">{artistType}</s-text>, but this app
-              expects{" "}
-              <s-text fontWeight="bold">{APP_ARTIST_METAOBJECT_TYPE}</s-text>.
-              Run <s-text fontWeight="bold">shopify app deploy</s-text> so the
-              app-owned definition is installed.
-            </s-paragraph>
-          </s-banner>
-        </s-section>
-      )}
-
-      {productOk && !productPointsAtApp && usingAppArtist && (
-        <s-section heading="Point Product custom.artist at app Artist">
-          <s-paragraph>
-            Open{" "}
-            <s-text fontWeight="bold">
-              Settings → Custom data → Products → artist
-            </s-text>{" "}
-            and change the metaobject reference to the{" "}
-            <s-text fontWeight="bold">app Artist</s-text> (
-            {APP_ARTIST_METAOBJECT_TYPE}), not the merchant type{" "}
-            <s-text fontWeight="bold">artist</s-text>.
-          </s-paragraph>
-        </s-section>
-      )}
-
-      {!productOk && (
-        <s-section heading="Product custom.artist metafield missing">
-          <s-paragraph>
-            The Product <s-text fontWeight="bold">custom.artist</s-text>{" "}
-            metaobject-reference metafield was not found. This app does not
-            create or modify it — please add it in{" "}
-            <s-text fontWeight="bold">
-              Settings → Custom data → Products
-            </s-text>{" "}
-            so it references the app Artist (
-            {APP_ARTIST_METAOBJECT_TYPE}).
-          </s-paragraph>
-        </s-section>
-      )}
-
-      {customerOk && !customerPointsAtApp && usingAppArtist && !typeMismatch && (
-        <s-section heading="Recreate customer followed_artists">
-          <s-banner tone="warning">
-            <s-paragraph>
-              <s-text fontWeight="bold">custom.followed_artists</s-text> exists
-              but still references the old merchant Artist. Delete it in{" "}
-              <s-text fontWeight="bold">
-                Settings → Custom data → Customers
-              </s-text>
-              , then click{" "}
-              <s-text fontWeight="bold">Create customer metafield</s-text> so it
-              points at {APP_ARTIST_METAOBJECT_TYPE}.
-            </s-paragraph>
+      {result?.status === "error" && (
+        <s-section heading="Setup error">
+          <s-banner tone="critical">
+            <s-paragraph>{result.message}</s-paragraph>
           </s-banner>
         </s-section>
       )}
@@ -247,82 +224,36 @@ export default function ArtistFollowSetup() {
         <s-section heading="Configuration error">
           <s-banner tone="critical">
             <s-paragraph>
-              A customer metafield{" "}
-              <s-text fontWeight="bold">custom.followed_artists</s-text> already
-              exists with type{" "}
+              <s-text fontWeight="bold">custom.followed_artists</s-text> exists
+              with type{" "}
               <s-text fontWeight="bold">
                 {status.customerFollowedMetafield.actualType}
               </s-text>
               , but this feature needs{" "}
-              <s-text fontWeight="bold">{CUSTOMER_METAFIELD.type}</s-text>. The
-              app will not modify it automatically. Remove or fix the existing
-              definition in{" "}
-              <s-text fontWeight="bold">
-                Settings → Custom data → Customers
-              </s-text>
-              , then re-check.
+              <s-text fontWeight="bold">{CUSTOMER_METAFIELD.type}</s-text>.
+              Remove it in Settings → Custom data → Customers, then Run setup.
             </s-paragraph>
           </s-banner>
         </s-section>
       )}
 
-      {result?.status === "error" && !typeMismatch && (
-        <s-section heading="Setup error">
-          <s-banner tone="critical">
-            <s-paragraph>{result.message}</s-paragraph>
-          </s-banner>
-        </s-section>
-      )}
-
-      {!customerOk && !typeMismatch && (
-        <s-section heading="Customer metafield missing">
-          <s-paragraph>
-            The customer metafield definition has not been created yet. Click{" "}
-            <s-text fontWeight="bold">Create customer metafield</s-text> above —
-            the app creates it for you via the Admin GraphQL API (it never
-            duplicates an existing definition).
-          </s-paragraph>
-        </s-section>
-      )}
-
-      <s-section slot="aside" heading="Customer metafield">
+      <s-section slot="aside" heading="What Run setup does">
         <s-stack direction="block" gap="tight">
           <s-paragraph>
-            <s-text tone="subdued">Namespace / key</s-text>
-            <br />
-            <s-text fontWeight="bold">
-              {CUSTOMER_METAFIELD.namespace}.{CUSTOMER_METAFIELD.key}
-            </s-text>
+            1. Creates/updates <s-text fontWeight="bold">{APP_ARTIST_METAOBJECT_TYPE}</s-text>{" "}
+            (name, image, bio, collection) and enables metaobject options
+            including Online Store pages.
           </s-paragraph>
           <s-paragraph>
-            <s-text tone="subdued">Type</s-text>
-            <br />
-            <s-text fontWeight="bold">{CUSTOMER_METAFIELD.type}</s-text>
+            2. Creates Product <s-text fontWeight="bold">custom.artist</s-text>{" "}
+            pointing at that Artist (if missing).
           </s-paragraph>
           <s-paragraph>
-            <s-text tone="subdued">Reference</s-text>
-            <br />
-            <s-text fontWeight="bold">
-              {artistType} ({status.artistMetaobject.definition?.name || "Artist"})
-            </s-text>
+            3. Creates Customer{" "}
+            <s-text fontWeight="bold">custom.followed_artists</s-text> pointing
+            at that Artist (if missing).
           </s-paragraph>
         </s-stack>
-      </s-section>
-
-      <s-section slot="aside" heading="Add the button to your theme">
-        <s-paragraph>
-          Online Store → Themes → Customize → open an{" "}
-          <s-text fontWeight="bold">Artist</s-text> page (metaobject template) →
-          Add block → Apps → <s-text fontWeight="bold">Follow Artist</s-text>.
-        </s-paragraph>
-      </s-section>
-
-      <s-section slot="aside" heading="Shopify Flow">
-        <s-paragraph>
-          Followers are stored on the customer, ready for a Flow that emails
-          followers when an artist publishes a new product. This app does not
-          send any email.
-        </s-paragraph>
       </s-section>
     </s-page>
   );
@@ -332,6 +263,4 @@ export function ErrorBoundary() {
   return boundary.error(useRouteError());
 }
 
-export const headers = (headersArgs) => {
-  return boundary.headers(headersArgs);
-};
+export const headers = (headersArgs) => boundary.headers(headersArgs);

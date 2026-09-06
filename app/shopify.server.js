@@ -6,7 +6,7 @@ import {
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
-import { ensureCustomerFollowedArtistsDefinition } from "./lib/artist-follow.server";
+import { runArtistFollowSetup } from "./lib/artist-follow.server";
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -21,17 +21,16 @@ const shopify = shopifyApp({
     expiringOfflineAccessTokens: true,
   },
   hooks: {
-    // On install / re-auth, best-effort create the customer
-    // `custom.followed_artists` metafield definition. Never block auth if the
-    // store isn't fully configured yet — the admin setup page reports and fixes.
+    // On install / re-auth, best-effort create Artist + product/customer
+    // metafields. Never block auth — the admin setup page reports and fixes.
     afterAuth: async ({ session, admin }) => {
       try {
-        const result = await ensureCustomerFollowedArtistsDefinition(admin);
+        const result = await runArtistFollowSetup(admin);
         if (result.status === "error") {
           console.warn("[artist-follow] setup incomplete after auth", {
             shop: session.shop,
-            reason: result.reason,
             message: result.message,
+            steps: result.steps,
           });
         }
       } catch (error) {
