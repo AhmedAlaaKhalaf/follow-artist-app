@@ -144,14 +144,29 @@
         function show(){ open = true; panel.hidden = false; toggle.setAttribute('aria-expanded','true'); render(); markSeen(); }
         function hide(){ open = false; panel.hidden = true; toggle.setAttribute('aria-expanded','false'); }
 
+        function refresh(){
+          return api('/notifications', { method:'GET', headers:{'Accept':'application/json'}, credentials:'same-origin' })
+            .then(function(res){
+              data = res && res.logged_in ? res : { artists: [], notifications: [] };
+              setBadge(data.unseen_count || 0);
+              if (open) render();
+              return data;
+            })
+            .catch(function(){});
+        }
+
         toggle.addEventListener('click', function(e){ e.stopPropagation(); open ? hide() : show(); });
         if (closeBtn) closeBtn.addEventListener('click', function(e){ e.stopPropagation(); hide(); });
         document.addEventListener('click', function(e){ if (open && !root.contains(e.target)) hide(); });
         document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && open) hide(); });
 
-        api('/notifications', { method:'GET', headers:{'Accept':'application/json'}, credentials:'same-origin' })
-          .then(function(res){ data = res && res.logged_in ? res : { artists: [], notifications: [] }; setBadge(data.unseen_count || 0); })
-          .catch(function(){});
+        // Re-fetch when Follow/Unfollow completes (incl. auto-follow after login).
+        document.addEventListener('artist-follow:changed', function(){
+          seenSent = false;
+          refresh();
+        });
+
+        refresh();
       });
     })();
   </script>

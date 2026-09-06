@@ -4,6 +4,9 @@
  * The button only ever tells the backend which artist (type + handle) the page
  * is showing. The authenticated customer is determined server-side from the
  * signed App Proxy request, so nothing sensitive is exposed here.
+ *
+ * Logged-out flow: save a pending follow intent → login → return here →
+ * auto-follow so the button shows Following without a second click.
  */
 (function () {
   "use strict";
@@ -14,6 +17,79 @@
     FOLLOWING: "following",
     LOADING: "loading",
   };
+
+  var PENDING_KEY = "artist-follow-pending";
+  var FOLLOW_QUERY = "af_follow";
+
+  function pendingKey(type, handle) {
+    return String(type || "") + "::" + String(handle || "");
+  }
+
+  function savePending(type, handle) {
+    try {
+      sessionStorage.setItem(
+        PENDING_KEY,
+        JSON.stringify({
+          type: type,
+          handle: handle,
+          key: pendingKey(type, handle),
+          ts: Date.now(),
+        }),
+      );
+    } catch (e) {
+      // ignore quota / private mode
+    }
+  }
+
+  function readPending() {
+    try {
+      var raw = sessionStorage.getItem(PENDING_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function clearPending() {
+    try {
+      sessionStorage.removeItem(PENDING_KEY);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function hasFollowQuery() {
+    try {
+      return new URLSearchParams(window.location.search).get(FOLLOW_QUERY) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function stripFollowQuery() {
+    try {
+      var url = new URL(window.location.href);
+      if (!url.searchParams.has(FOLLOW_QUERY)) return;
+      url.searchParams.delete(FOLLOW_QUERY);
+      var next = url.pathname + (url.search ? url.search : "") + url.hash;
+      window.history.replaceState({}, "", next);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function notifyFollowChanged(detail) {
+    try {
+      document.dispatchEvent(
+        new CustomEvent("artist-follow:changed", {
+          detail: detail || {},
+        }),
+      );
+    } catch (e) {
+      // ignore
+    }
+  }
 
   function init(root) {
     if (root.__artistFollowReady) return;
@@ -109,19 +185,21 @@
       }).then(function (body) {
         following = Boolean(body.following);
         render(following ? STATE.FOLLOWING : STATE.NOT_FOLLOWING);
+        return body;
       });
     }
 
-    function mutate() {
-      if (inFlight) return; // guard against duplicate clicks
+    function mutate(forceFollow) {
+      if (inFlight) return Promise.resolve();
       inFlight = true;
       setError(false);
 
       var wasFollowing = following;
+      var shouldFollow = forceFollow ? true : !wasFollowing;
       render(STATE.LOADING);
 
-      var path = wasFollowing ? "/unfollow" : "/follow";
-      request(path, {
+      var path = shouldFollow ? "/follow" : "/unfollow";
+      return request(path, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -133,37 +211,62 @@
         .then(function (body) {
           following = Boolean(body.following);
           render(following ? STATE.FOLLOWING : STATE.NOT_FOLLOWING);
+          notifyFollowChanged({
+            type: cfg.type,
+            handle: cfg.handle,
+            following: following,
+          });
+          return body;
         })
         .catch(function () {
-          // Restore previous state and surface a friendly message.
           following = wasFollowing;
           render(following ? STATE.FOLLOWING : STATE.NOT_FOLLOWING);
           setError(true);
         })
-        .then(function () {
+        .then(function (body) {
           inFlight = false;
+          return body;
         });
+    }
+
+    function shouldAutoFollow() {
+      var pending = readPending();
+      var key = pendingKey(cfg.type, cfg.handle);
+      var fromStorage = pending && pending.key === key;
+      var fromQuery = hasFollowQuery();
+      return Boolean(fromStorage || fromQuery);
+    }
+
+    function buildLoginReturnTo() {
+      var returnTo =
+        cfg.returnTo ||
+        window.location.pathname + window.location.search ||
+        "/";
+      if (returnTo.charAt(0) !== "/") {
+        returnTo = "/" + returnTo;
+      }
+      // Mark intent in the return URL as a backup to sessionStorage.
+      try {
+        var u = new URL(returnTo, window.location.origin);
+        u.searchParams.set(FOLLOW_QUERY, "1");
+        return u.pathname + (u.search ? u.search : "");
+      } catch (e) {
+        var join = returnTo.indexOf("?") >= 0 ? "&" : "?";
+        return returnTo + join + FOLLOW_QUERY + "=1";
+      }
     }
 
     // Wire up interactions.
     button.addEventListener("click", function () {
       if (!cfg.loggedIn) {
-        // New Customer Accounts: only /customer_authentication/login?return_to=
-        // returns to the storefront. /account/login always lands on account/orders.
-        // Docs: https://shopify.dev/docs/storefronts/themes/sign-in
-        var returnTo =
-          cfg.returnTo ||
-          window.location.pathname + window.location.search ||
-          "/";
-        if (returnTo.charAt(0) !== "/") {
-          returnTo = "/" + returnTo;
-        }
+        // Persist follow intent across New Customer Accounts login.
+        savePending(cfg.type, cfg.handle);
         window.location.href =
           "/customer_authentication/login?return_to=" +
-          encodeURIComponent(returnTo);
+          encodeURIComponent(buildLoginReturnTo());
         return;
       }
-      mutate();
+      mutate(false);
     });
 
     // Initial render.
@@ -172,10 +275,24 @@
       return;
     }
 
-    // Logged in: fetch current status; keep disabled until we know.
+    // Logged in: if they clicked Follow before login, auto-follow now.
     render(STATE.LOADING);
+    if (shouldAutoFollow()) {
+      clearPending();
+      stripFollowQuery();
+      mutate(true).catch(function () {
+        // Fall back to status if auto-follow fails.
+        return loadStatus().catch(function () {
+          following = false;
+          render(STATE.NOT_FOLLOWING);
+          setError(true);
+        });
+      });
+      return;
+    }
+
+    stripFollowQuery();
     loadStatus().catch(function () {
-      // If status fails, fall back to a usable "not following" state.
       following = false;
       render(STATE.NOT_FOLLOWING);
       setError(true);
@@ -195,7 +312,6 @@
     initAll();
   }
 
-  // Re-init when the block is re-rendered in the theme editor.
   document.addEventListener("shopify:section:load", initAll);
   document.addEventListener("shopify:block:select", initAll);
 })();
