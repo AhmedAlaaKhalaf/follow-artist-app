@@ -39,10 +39,20 @@ async function adminGraphql(admin, query, variables) {
   const response = await admin.graphql(query, { variables });
   const body = await response.json();
   if (body?.errors?.length) {
-    throw new ArtistFollowError("Admin GraphQL request failed", {
-      code: "graphql_error",
-      details: body.errors,
-    });
+    const message = body.errors.map((e) => e.message).filter(Boolean).join("; ");
+    const blockedCustomer =
+      /not approved to access the Customer/i.test(message) ||
+      /protected customer data/i.test(message);
+    throw new ArtistFollowError(
+      blockedCustomer
+        ? "This app needs Protected customer data access in the Partner Dashboard."
+        : message || "Admin GraphQL request failed",
+      {
+        status: blockedCustomer ? 403 : 500,
+        code: blockedCustomer ? "customer_data_blocked" : "graphql_error",
+        details: body.errors,
+      },
+    );
   }
   return body.data;
 }
@@ -689,7 +699,9 @@ export async function getFollowedArtists(admin, customerGid) {
   try {
     const parsed = JSON.parse(metafield.value);
     if (Array.isArray(parsed)) {
-      gids = parsed.filter((v) => typeof v === "string");
+      gids = parsed.filter(
+        (v) => typeof v === "string" && v.startsWith("gid://shopify/Metaobject/"),
+      );
     }
   } catch {
     // Malformed value — fall back to the resolved references so we never
@@ -716,10 +728,15 @@ async function writeFollowedArtists(admin, customerGid, gids) {
 
   const errors = data.metafieldsSet.userErrors;
   if (errors?.length) {
-    throw new ArtistFollowError("Failed to update followed artists", {
-      code: "metafield_write_failed",
-      details: errors,
-    });
+    throw new ArtistFollowError(
+      errors.map((e) => e.message).filter(Boolean).join("; ") ||
+        "Failed to update followed artists",
+      {
+        status: 422,
+        code: "metafield_write_failed",
+        details: errors,
+      },
+    );
   }
 }
 
@@ -733,7 +750,15 @@ async function writeFollowedArtists(admin, customerGid, gids) {
  */
 export async function followArtist(admin, { lockKey, customerGid, artistGid }) {
   return withCustomerLock(lockKey, async () => {
-    const { gids } = await getFollowedArtists(admin, customerGid);
+    const { customerExists, gids } = await getFollowedArtists(admin, customerGid);
+    if (!customerExists) {
+      // Common right after New Customer Accounts register/login — Admin API
+      // can lag the storefront session by a moment.
+      throw new ArtistFollowError("Customer not ready yet. Please try again.", {
+        status: 503,
+        code: "customer_not_ready",
+      });
+    }
     if (gids.includes(artistGid)) {
       return { following: true, changed: false };
     }

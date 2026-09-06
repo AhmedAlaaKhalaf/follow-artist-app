@@ -119,10 +119,10 @@
     var inFlight = false;
     var following = false;
 
-    function setError(show) {
+    function setError(show, message) {
       if (!errorEl) return;
       if (show) {
-        errorEl.textContent = cfg.labels.error;
+        errorEl.textContent = message || cfg.labels.error;
         errorEl.hidden = false;
       } else {
         errorEl.textContent = "";
@@ -166,8 +166,14 @@
           })
           .then(function (body) {
             if (!res.ok) {
-              var err = new Error(body && body.error ? body.error : "request_failed");
+              var err = new Error(
+                (body && body.message) ||
+                  (body && body.error) ||
+                  "request_failed",
+              );
               err.status = res.status;
+              err.code = body && body.error;
+              err.body = body;
               throw err;
             }
             return body;
@@ -186,6 +192,12 @@
         following = Boolean(body.following);
         render(following ? STATE.FOLLOWING : STATE.NOT_FOLLOWING);
         return body;
+      });
+    }
+
+    function sleep(ms) {
+      return new Promise(function (resolve) {
+        setTimeout(resolve, ms);
       });
     }
 
@@ -218,14 +230,36 @@
           });
           return body;
         })
-        .catch(function () {
+        .catch(function (err) {
           following = wasFollowing;
           render(following ? STATE.FOLLOWING : STATE.NOT_FOLLOWING);
-          setError(true);
+          setError(true, err && err.message);
+          throw err;
         })
-        .then(function (body) {
-          inFlight = false;
-          return body;
+        .then(
+          function (body) {
+            inFlight = false;
+            return body;
+          },
+          function (err) {
+            inFlight = false;
+            throw err;
+          },
+        );
+    }
+
+    /** One auto-follow after login (no retries — a 500 means a real server error). */
+    function autoFollowAfterLogin() {
+      return sleep(300)
+        .then(function () {
+          return mutate(true);
+        })
+        .catch(function (err) {
+          return loadStatus().catch(function () {
+            following = false;
+            render(STATE.NOT_FOLLOWING);
+            setError(true, err && err.message);
+          });
         });
     }
 
@@ -275,19 +309,12 @@
       return;
     }
 
-    // Logged in: if they clicked Follow before login, auto-follow now.
+    // Logged in: if they clicked Follow before login, auto-follow once.
     render(STATE.LOADING);
     if (shouldAutoFollow()) {
       clearPending();
       stripFollowQuery();
-      mutate(true).catch(function () {
-        // Fall back to status if auto-follow fails.
-        return loadStatus().catch(function () {
-          following = false;
-          render(STATE.NOT_FOLLOWING);
-          setError(true);
-        });
-      });
+      autoFollowAfterLogin();
       return;
     }
 
