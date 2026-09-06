@@ -53,4 +53,3 @@ prefix = "apps"
 [build]
 # Keep production Railway URLs when running `npm run dev` locally.
 automatically_update_urls_on_dev = false
-include_config_on_deploy = true

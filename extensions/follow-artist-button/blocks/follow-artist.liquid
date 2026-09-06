@@ -16,7 +16,14 @@
 
 {%- if artist_handle != blank and artist_type != blank -%}
   {%- assign proxy_base = block.settings.proxy_base | default: '/apps/artist-follow' -%}
-  {%- capture return_url -%}{{ request.path }}{%- endcapture -%}
+  {%- comment -%}
+    New Customer Accounts use `return_to`; classic accounts use `return_url`.
+    Pass both so login returns to this Artist page instead of /account.
+  {%- endcomment -%}
+  {%- assign return_path = request.path -%}
+  {%- if request.query_string != blank -%}
+    {%- assign return_path = return_path | append: '?' | append: request.query_string -%}
+  {%- endif -%}
 
   <div
     class="artist-follow"
@@ -25,7 +32,8 @@
     data-artist-type="{{ artist_type | escape }}"
     data-artist-handle="{{ artist_handle | escape }}"
     data-logged-in="{% if customer %}true{% else %}false{% endif %}"
-    data-login-url="{{ routes.account_login_url }}?return_url={{ return_url | url_encode }}"
+    data-login-url="{{ routes.account_login_url }}"
+    data-return-to="{{ return_path | escape }}"
     data-label-follow="{{ block.settings.label_follow | escape }}"
     data-label-follow-cta="{{ block.settings.label_follow_cta | escape }}"
     data-label-following="{{ block.settings.label_following | escape }}"

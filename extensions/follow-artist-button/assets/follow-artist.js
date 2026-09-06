@@ -29,6 +29,7 @@
       handle: root.getAttribute("data-artist-handle") || "",
       loggedIn: root.getAttribute("data-logged-in") === "true",
       loginUrl: root.getAttribute("data-login-url") || "/account/login",
+      returnTo: root.getAttribute("data-return-to") || "",
       labels: {
         follow: root.getAttribute("data-label-follow") || "Follow Artist",
         followCta: root.getAttribute("data-label-follow-cta") || "+ Follow Artist",
@@ -147,7 +148,21 @@
     // Wire up interactions.
     button.addEventListener("click", function () {
       if (!cfg.loggedIn) {
-        window.location.href = cfg.loginUrl;
+        // Prefer the live page URL so login returns here (not /account).
+        // New Customer Accounts: return_to. Classic accounts: return_url.
+        var returnTo =
+          cfg.returnTo ||
+          window.location.pathname + window.location.search ||
+          "/";
+        var loginBase = cfg.loginUrl.split("?")[0] || "/account/login";
+        var sep = loginBase.indexOf("?") >= 0 ? "&" : "?";
+        window.location.href =
+          loginBase +
+          sep +
+          "return_to=" +
+          encodeURIComponent(returnTo) +
+          "&return_url=" +
+          encodeURIComponent(returnTo);
         return;
       }
       mutate();
