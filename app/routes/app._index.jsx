@@ -26,9 +26,15 @@ function renderStatus(ok, label) {
 export default function Home() {
   const { status, ok } = useLoaderData();
 
-  const artistOk = Boolean(status?.artistMetaobject?.ok);
-  const productOk = Boolean(status?.productArtistMetafield?.ok);
-  const customerOk = Boolean(status?.customerFollowedMetafield?.ok);
+  const artistOk =
+    Boolean(status?.artistMetaobject?.ok) &&
+    Boolean(status?.artistMetaobject?.usingAppArtist);
+  const productOk =
+    Boolean(status?.productArtistMetafield?.ok) &&
+    Boolean(status?.productArtistMetafield?.pointsAtAppArtist);
+  const customerOk =
+    Boolean(status?.customerFollowedMetafield?.ok) &&
+    Boolean(status?.customerFollowedMetafield?.pointsAtAppArtist);
   const ready = ok && artistOk && productOk && customerOk;
 
   return (

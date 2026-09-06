@@ -10,13 +10,18 @@
  */
 
 import {
+  APP_ARTIST_METAOBJECT_TYPE,
   CUSTOMER_METAFIELD,
   NOTIFICATIONS_DEFAULT_LOOKBACK_DAYS,
   NOTIFICATIONS_SEEN_METAFIELD,
   PRODUCT_ARTIST_METAFIELD,
 } from "./artist-follow-constants";
 
-export { CUSTOMER_METAFIELD, PRODUCT_ARTIST_METAFIELD };
+export {
+  APP_ARTIST_METAOBJECT_TYPE,
+  CUSTOMER_METAFIELD,
+  PRODUCT_ARTIST_METAFIELD,
+};
 
 /** Error carrying GraphQL userErrors / transport errors without leaking to storefront. */
 export class ArtistFollowError extends Error {
@@ -81,6 +86,12 @@ const CONFIG_QUERY = `#graphql
   }
 `;
 
+const METAOBJECT_DEFINITION_BY_TYPE_QUERY = `#graphql
+  query MetaobjectDefinitionByType($type: String!) {
+    metaobjectDefinitionByType(type: $type) { id name type }
+  }
+`;
+
 const METAOBJECT_DEFINITIONS_QUERY = `#graphql
   query ArtistMetaobjectDefinitions {
     metaobjectDefinitions(first: 100) {
@@ -95,13 +106,39 @@ const METAOBJECT_DEFINITION_BY_ID_QUERY = `#graphql
   }
 `;
 
+function isAppArtistType(type) {
+  if (!type) return false;
+  const t = type.toLowerCase();
+  // Exact app shorthand, or deployed form: app--<api_key>--artist
+  return t === APP_ARTIST_METAOBJECT_TYPE || /^app--[a-f0-9]+--artist$/.test(t);
+}
+
 /**
- * Find the Artist metaobject definition id.
- * Preferred source: the existing Product `custom.artist` definition's
- * `metaobject_definition_id` validation (authoritative, no guessing).
- * Fallback: a metaobject definition whose type/name looks like "artist".
+ * Find the Artist metaobject definition.
+ * Prefers the app-owned `$app:artist` from shopify.app.toml.
+ * Falls back to Product `custom.artist` validation, then merchant type `artist`.
  */
 export async function resolveArtistDefinition(admin, config) {
+  // 1. App-owned definition created by this app (preferred).
+  const byType = await adminGraphql(admin, METAOBJECT_DEFINITION_BY_TYPE_QUERY, {
+    type: APP_ARTIST_METAOBJECT_TYPE,
+  });
+  if (byType?.metaobjectDefinitionByType) {
+    return byType.metaobjectDefinitionByType;
+  }
+
+  const listed = await adminGraphql(admin, METAOBJECT_DEFINITIONS_QUERY, {});
+  const nodes = listed?.metaobjectDefinitions?.nodes ?? [];
+  const appOwned =
+    nodes.find((n) => isAppArtistType(n.type)) ||
+    nodes.find(
+      (n) =>
+        n.name?.toLowerCase() === "artist" &&
+        String(n.type || "").toLowerCase().startsWith("app--"),
+    );
+  if (appOwned) return appOwned;
+
+  // 2. Product custom.artist validation (may still point at merchant Artist).
   const productDef = config?.productArtist?.nodes?.[0];
   const validationId = productDef?.validations?.find(
     (v) => v.name === "metaobject_definition_id",
@@ -116,9 +153,7 @@ export async function resolveArtistDefinition(admin, config) {
     }
   }
 
-  // Fallback: search by type/name.
-  const data = await adminGraphql(admin, METAOBJECT_DEFINITIONS_QUERY, {});
-  const nodes = data?.metaobjectDefinitions?.nodes ?? [];
+  // 3. Last resort: merchant-owned type "artist".
   return (
     nodes.find((n) => n.type?.toLowerCase() === "artist") ||
     nodes.find((n) => n.name?.toLowerCase() === "artist") ||
@@ -137,6 +172,25 @@ export async function getConfigStatus(admin) {
   const customerFollowed = config?.customerFollowed?.nodes?.[0] ?? null;
 
   const artistDefinition = await resolveArtistDefinition(admin, config);
+  const usingAppArtist = isAppArtistType(artistDefinition?.type);
+
+  const productRefId = productArtist?.validations?.find(
+    (v) => v.name === "metaobject_definition_id",
+  )?.value;
+  const productPointsAtAppArtist =
+    Boolean(productRefId) &&
+    Boolean(artistDefinition?.id) &&
+    productRefId === artistDefinition.id &&
+    usingAppArtist;
+
+  const customerRefId = customerFollowed?.validations?.find(
+    (v) => v.name === "metaobject_definition_id",
+  )?.value;
+  const customerPointsAtAppArtist =
+    Boolean(customerRefId) &&
+    Boolean(artistDefinition?.id) &&
+    customerRefId === artistDefinition.id &&
+    usingAppArtist;
 
   const customerTypeOk =
     customerFollowed?.type?.name === CUSTOMER_METAFIELD.type;
@@ -144,10 +198,13 @@ export async function getConfigStatus(admin) {
   return {
     artistMetaobject: {
       ok: Boolean(artistDefinition),
+      usingAppArtist,
+      expectedType: APP_ARTIST_METAOBJECT_TYPE,
       definition: artistDefinition,
     },
     productArtistMetafield: {
       ok: Boolean(productArtist),
+      pointsAtAppArtist: productPointsAtAppArtist,
       definition: productArtist,
     },
     customerFollowedMetafield: {
@@ -155,6 +212,7 @@ export async function getConfigStatus(admin) {
       // present but wrong type => configuration error, must not be auto-changed
       ok: Boolean(customerFollowed) && customerTypeOk,
       typeMismatch: Boolean(customerFollowed) && !customerTypeOk,
+      pointsAtAppArtist: customerPointsAtAppArtist,
       actualType: customerFollowed?.type?.name ?? null,
       definition: customerFollowed,
     },
@@ -206,7 +264,7 @@ export async function ensureCustomerFollowedArtistsDefinition(admin) {
       status: "error",
       reason: "artist_definition_missing",
       message:
-        "Could not locate the Artist metaobject definition. Ensure the Artist metaobject exists and the Product custom.artist metafield references it before creating the customer metafield.",
+        `Could not locate the app Artist metaobject (${APP_ARTIST_METAOBJECT_TYPE}). Deploy the app so shopify.app.toml creates it, then try again.`,
     };
   }
 

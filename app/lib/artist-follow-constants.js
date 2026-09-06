@@ -20,6 +20,12 @@ export const PRODUCT_ARTIST_METAFIELD = {
   ownerType: "PRODUCT",
 };
 
+/**
+ * App-owned Artist metaobject type from shopify.app.toml `[metaobjects.app.artist]`.
+ * This is what `custom.followed_artists` and Product `custom.artist` should reference.
+ */
+export const APP_ARTIST_METAOBJECT_TYPE = "$app:artist";
+
 // App-internal state: when the customer last opened the notifications panel.
 // Stored as an unstructured customer metafield (no definition required).
 export const NOTIFICATIONS_SEEN_METAFIELD = {

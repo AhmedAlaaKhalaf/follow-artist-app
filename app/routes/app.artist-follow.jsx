@@ -8,6 +8,7 @@ import {
   getConfigStatus,
 } from "../lib/artist-follow.server";
 import {
+  APP_ARTIST_METAOBJECT_TYPE,
   APP_PROXY_BASE,
   CUSTOMER_METAFIELD,
 } from "../lib/artist-follow-constants";
@@ -15,12 +16,22 @@ import {
 const PROXY_PATH = APP_PROXY_BASE;
 
 const EMPTY_STATUS = {
-  artistMetaobject: { ok: false, definition: null },
-  productArtistMetafield: { ok: false, definition: null },
+  artistMetaobject: {
+    ok: false,
+    usingAppArtist: false,
+    expectedType: APP_ARTIST_METAOBJECT_TYPE,
+    definition: null,
+  },
+  productArtistMetafield: {
+    ok: false,
+    pointsAtAppArtist: false,
+    definition: null,
+  },
   customerFollowedMetafield: {
     exists: false,
     ok: false,
     typeMismatch: false,
+    pointsAtAppArtist: false,
     actualType: null,
     definition: null,
   },
@@ -81,11 +92,25 @@ export default function ArtistFollowSetup() {
   const isSubmitting = fetcher.state !== "idle";
 
   const artistOk = status.artistMetaobject.ok;
+  const usingAppArtist = Boolean(status.artistMetaobject.usingAppArtist);
   const productOk = status.productArtistMetafield.ok;
+  const productPointsAtApp = Boolean(
+    status.productArtistMetafield.pointsAtAppArtist,
+  );
   const customerOk = status.customerFollowedMetafield.ok;
+  const customerPointsAtApp = Boolean(
+    status.customerFollowedMetafield.pointsAtAppArtist,
+  );
   const typeMismatch = status.customerFollowedMetafield.typeMismatch;
-
-  const ready = artistOk && productOk && customerOk;
+  const artistType =
+    status.artistMetaobject.definition?.type || APP_ARTIST_METAOBJECT_TYPE;
+  const ready =
+    artistOk &&
+    usingAppArtist &&
+    productOk &&
+    productPointsAtApp &&
+    customerOk &&
+    customerPointsAtApp;
 
   useEffect(() => {
     if (result?.status === "created") {
@@ -123,11 +148,17 @@ export default function ArtistFollowSetup() {
 
       <s-section heading="Configuration">
         <s-stack direction="block" gap="base">
-          {renderCheck(artistOk, "Artist metaobject definition found")}
-          {renderCheck(productOk, "Product custom.artist metafield found")}
           {renderCheck(
-            customerOk,
-            "Customer custom.followed_artists metafield found",
+            artistOk && usingAppArtist,
+            `Artist metaobject found (${artistType})`,
+          )}
+          {renderCheck(
+            productOk && productPointsAtApp,
+            "Product custom.artist references app Artist",
+          )}
+          {renderCheck(
+            customerOk && customerPointsAtApp,
+            "Customer custom.followed_artists references app Artist",
           )}
           {renderCheck(true, `App Proxy configured (${PROXY_PATH})`)}
         </s-stack>
@@ -142,10 +173,40 @@ export default function ArtistFollowSetup() {
       {!artistOk && (
         <s-section heading="Artist metaobject missing">
           <s-paragraph>
-            The app could not locate the Artist metaobject definition. Make sure
-            the Artist metaobject exists and that the Product{" "}
-            <s-text fontWeight="bold">custom.artist</s-text> metafield references
-            it. The app reads that reference to scope the customer metafield.
+            Deploy the app so{" "}
+            <s-text fontWeight="bold">shopify.app.toml</s-text> creates{" "}
+            <s-text fontWeight="bold">{APP_ARTIST_METAOBJECT_TYPE}</s-text>.
+            Then reopen this page.
+          </s-paragraph>
+        </s-section>
+      )}
+
+      {artistOk && !usingAppArtist && (
+        <s-section heading="Wrong Artist type">
+          <s-banner tone="warning">
+            <s-paragraph>
+              Found Artist type{" "}
+              <s-text fontWeight="bold">{artistType}</s-text>, but this app
+              expects{" "}
+              <s-text fontWeight="bold">{APP_ARTIST_METAOBJECT_TYPE}</s-text>.
+              Run <s-text fontWeight="bold">shopify app deploy</s-text> so the
+              app-owned definition is installed.
+            </s-paragraph>
+          </s-banner>
+        </s-section>
+      )}
+
+      {productOk && !productPointsAtApp && usingAppArtist && (
+        <s-section heading="Point Product custom.artist at app Artist">
+          <s-paragraph>
+            Open{" "}
+            <s-text fontWeight="bold">
+              Settings → Custom data → Products → artist
+            </s-text>{" "}
+            and change the metaobject reference to the{" "}
+            <s-text fontWeight="bold">app Artist</s-text> (
+            {APP_ARTIST_METAOBJECT_TYPE}), not the merchant type{" "}
+            <s-text fontWeight="bold">artist</s-text>.
           </s-paragraph>
         </s-section>
       )}
@@ -159,8 +220,26 @@ export default function ArtistFollowSetup() {
             <s-text fontWeight="bold">
               Settings → Custom data → Products
             </s-text>{" "}
-            so it references the Artist metaobject.
+            so it references the app Artist (
+            {APP_ARTIST_METAOBJECT_TYPE}).
           </s-paragraph>
+        </s-section>
+      )}
+
+      {customerOk && !customerPointsAtApp && usingAppArtist && !typeMismatch && (
+        <s-section heading="Recreate customer followed_artists">
+          <s-banner tone="warning">
+            <s-paragraph>
+              <s-text fontWeight="bold">custom.followed_artists</s-text> exists
+              but still references the old merchant Artist. Delete it in{" "}
+              <s-text fontWeight="bold">
+                Settings → Custom data → Customers
+              </s-text>
+              , then click{" "}
+              <s-text fontWeight="bold">Create customer metafield</s-text> so it
+              points at {APP_ARTIST_METAOBJECT_TYPE}.
+            </s-paragraph>
+          </s-banner>
         </s-section>
       )}
 
@@ -224,7 +303,7 @@ export default function ArtistFollowSetup() {
             <s-text tone="subdued">Reference</s-text>
             <br />
             <s-text fontWeight="bold">
-              {status.artistMetaobject.definition?.name || "Artist"} metaobject
+              {artistType} ({status.artistMetaobject.definition?.name || "Artist"})
             </s-text>
           </s-paragraph>
         </s-stack>
