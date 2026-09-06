@@ -17,8 +17,9 @@
 {%- if artist_handle != blank and artist_type != blank -%}
   {%- assign proxy_base = block.settings.proxy_base | default: '/apps/artist-follow' -%}
   {%- comment -%}
-    New Customer Accounts use `return_to`; classic accounts use `return_url`.
-    Pass both so login returns to this Artist page instead of /account.
+    New Customer Accounts only honor return_to on /customer_authentication/login
+    (or routes.storefront_login_url). /account/login always sends shoppers to
+    shopify.com/.../account/orders after sign-in.
   {%- endcomment -%}
   {%- assign return_path = request.path -%}
   {%- if request.query_string != blank -%}
@@ -32,7 +33,7 @@
     data-artist-type="{{ artist_type | escape }}"
     data-artist-handle="{{ artist_handle | escape }}"
     data-logged-in="{% if customer %}true{% else %}false{% endif %}"
-    data-login-url="{{ routes.account_login_url }}"
+    data-login-url="/customer_authentication/login"
     data-return-to="{{ return_path | escape }}"
     data-label-follow="{{ block.settings.label_follow | escape }}"
     data-label-follow-cta="{{ block.settings.label_follow_cta | escape }}"

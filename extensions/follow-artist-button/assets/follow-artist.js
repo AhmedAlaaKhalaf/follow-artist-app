@@ -28,7 +28,7 @@
       type: root.getAttribute("data-artist-type") || "",
       handle: root.getAttribute("data-artist-handle") || "",
       loggedIn: root.getAttribute("data-logged-in") === "true",
-      loginUrl: root.getAttribute("data-login-url") || "/account/login",
+      loginUrl: root.getAttribute("data-login-url") || "/customer_authentication/login",
       returnTo: root.getAttribute("data-return-to") || "",
       labels: {
         follow: root.getAttribute("data-label-follow") || "Follow Artist",
@@ -148,20 +148,18 @@
     // Wire up interactions.
     button.addEventListener("click", function () {
       if (!cfg.loggedIn) {
-        // Prefer the live page URL so login returns here (not /account).
-        // New Customer Accounts: return_to. Classic accounts: return_url.
+        // New Customer Accounts: only /customer_authentication/login?return_to=
+        // returns to the storefront. /account/login always lands on account/orders.
+        // Docs: https://shopify.dev/docs/storefronts/themes/sign-in
         var returnTo =
           cfg.returnTo ||
           window.location.pathname + window.location.search ||
           "/";
-        var loginBase = cfg.loginUrl.split("?")[0] || "/account/login";
-        var sep = loginBase.indexOf("?") >= 0 ? "&" : "?";
+        if (returnTo.charAt(0) !== "/") {
+          returnTo = "/" + returnTo;
+        }
         window.location.href =
-          loginBase +
-          sep +
-          "return_to=" +
-          encodeURIComponent(returnTo) +
-          "&return_url=" +
+          "/customer_authentication/login?return_to=" +
           encodeURIComponent(returnTo);
         return;
       }
