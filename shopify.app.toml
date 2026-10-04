@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "96d48f2525369cf077fb98f96b46b1b3"
-application_url = "https://follow-artist-app-production.up.railway.app"
+application_url = "https://shopify.horizondm.com"
 embedded = true
 name = "follow-artist-app"
 
@@ -38,7 +38,7 @@ api_version = "2026-10"
   topics = [ "app/scopes_update" ]
 
 [auth]
-redirect_urls = [ "https://follow-artist-app-production.up.railway.app/api/auth" ]
+redirect_urls = [ "https://shopify.horizondm.com/api/auth" ]
 
 # App Proxy for the storefront "Follow Artist" endpoints.
 # Storefront path  ->  proxied to
@@ -46,7 +46,7 @@ redirect_urls = [ "https://follow-artist-app-production.up.railway.app/api/auth"
 #   /apps/artist-follow/follow   ->  {url}/follow
 #   /apps/artist-follow/unfollow ->  {url}/unfollow
 [app_proxy]
-url = "https://follow-artist-app-production.up.railway.app/proxy"
+url = "https://shopify.horizondm.com/proxy"
 subpath = "artist-follow"
 prefix = "apps"
 
