@@ -16,39 +16,68 @@ export default function App() {
   const { showForm } = useLoaderData();
 
   return (
-    <div className={styles.index}>
-      <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+    <div className={styles.page}>
+      <div className={styles.atmosphere} aria-hidden="true" />
+
+      <main className={styles.hero}>
+        <p className={styles.brand}>Follow Artist</p>
+        <h1 className={styles.heading}>
+          Stay close to the artists your customers love
+        </h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Let shoppers follow their favourite artists and get notified the moment
+          a new product goes live.
         </p>
+
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
-            <label className={styles.label}>
-              <span>Shop domain</span>
-              <input className={styles.input} type="text" name="shop" />
-              <span>e.g: my-shop-domain.myshopify.com</span>
+            <label className={styles.label} htmlFor="shop">
+              Shop domain
             </label>
-            <button className={styles.button} type="submit">
-              Log in
-            </button>
+            <div className={styles.ctaRow}>
+              <input
+                id="shop"
+                className={styles.input}
+                type="text"
+                name="shop"
+                placeholder="your-store.myshopify.com"
+                autoComplete="off"
+                required
+              />
+              <button className={styles.button} type="submit">
+                Open app
+              </button>
+            </div>
+            <span className={styles.hint}>
+              Use your myshopify.com domain to install or open the app
+            </span>
           </Form>
         )}
-        <ul className={styles.list}>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
-        </ul>
-      </div>
+      </main>
+
+      <section className={styles.steps} aria-label="How it works">
+        <div className={styles.step}>
+          <span className={styles.stepIndex}>01</span>
+          <h2 className={styles.stepTitle}>Follow</h2>
+          <p className={styles.stepText}>
+            Customers follow artists from artist pages in one tap.
+          </p>
+        </div>
+        <div className={styles.step}>
+          <span className={styles.stepIndex}>02</span>
+          <h2 className={styles.stepTitle}>Publish</h2>
+          <p className={styles.stepText}>
+            When an artist releases new work, followers are ready to see it.
+          </p>
+        </div>
+        <div className={styles.step}>
+          <span className={styles.stepIndex}>03</span>
+          <h2 className={styles.stepTitle}>Notify</h2>
+          <p className={styles.stepText}>
+            In-store notifications keep collectors in the loop instantly.
+          </p>
+        </div>
+      </section>
     </div>
   );
 }
