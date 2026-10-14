@@ -22,7 +22,9 @@ export default {
     // Local dev is served through the Shopify CLI Cloudflare tunnel, whose
     // origin differs from the internal request URL.
     "*.trycloudflare.com",
-    // Production host (Railway). Some embedded requests use the app origin.
+    // Production hosts. Some embedded requests use the app origin, which the
+    // proxy forwards as http:// so it never matches the https:// origin exactly.
     "*.up.railway.app",
+    "shopify.horizondm.com",
   ],
 };
