@@ -37,6 +37,11 @@ api_version = "2026-10"
   uri = "/webhooks/app/scopes_update"
   topics = [ "app/scopes_update" ]
 
+  # Email followers (via Resend) when a product by an artist they follow goes live.
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products"
+  topics = [ "products/create", "products/update" ]
+
 [auth]
 redirect_urls = [ "https://shopify.horizondm.com/api/auth" ]
 

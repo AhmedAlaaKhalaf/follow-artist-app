@@ -50,8 +50,8 @@ export default function Home() {
             Let logged-in customers follow their favourite artists. Follows are
             stored on the customer as{" "}
             <s-text fontWeight="bold">custom.followed_artists</s-text> and power
-            the storefront Follow button and the notification bell — ready for a
-            Shopify Flow that emails followers about new products.
+            the storefront Follow button, the notification bell, and email
+            alerts to followers when an artist publishes a new product.
           </s-paragraph>
           <s-stack direction="inline" gap="base" alignItems="center">
             <s-badge tone={ready ? "success" : "attention"}>
@@ -103,15 +103,16 @@ export default function Home() {
         <s-unordered-list>
           <s-list-item>Follow / unfollow via secure App Proxy endpoints.</s-list-item>
           <s-list-item>Customer identity verified server-side.</s-list-item>
-          <s-list-item>No extra database — Shopify data is the source of truth.</s-list-item>
+          <s-list-item>Follows live in Shopify data; the app only logs sent announcements.</s-list-item>
         </s-unordered-list>
       </s-section>
 
-      <s-section slot="aside" heading="Shopify Flow">
+      <s-section slot="aside" heading="Email notifications">
         <s-paragraph>
-          Use <s-text fontWeight="bold">custom.followed_artists</s-text> in a
-          Flow to email followers when an artist publishes a new product. This
-          app maintains the data; it does not send email.
+          When a product with <s-text fontWeight="bold">custom.artist</s-text>{" "}
+          goes live, followers of that artist get an email via Resend. Configure
+          and test it on the{" "}
+          <s-link href="/app/artist-follow">Artist Follow</s-link> page.
         </s-paragraph>
       </s-section>
     </s-page>

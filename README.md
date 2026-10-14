@@ -1,8 +1,6 @@
 # Follow Artist app
 
-A small, secure Shopify app that lets logged-in customers **follow / unfollow artists** on Artist metaobject pages. Follows are stored on the customer as `custom.followed_artists` (a `list.metaobject_reference`), ready for a future **Shopify Flow** that emails followers when an artist publishes a new product.
-
-This app **does not** send email — it only maintains the follow relationship.
+A small, secure Shopify app that lets logged-in customers **follow / unfollow artists** on Artist metaobject pages. Follows are stored on the customer as `custom.followed_artists` (a `list.metaobject_reference`), and followers are emailed (via Resend) when an artist publishes a new product.
 
 - [What the app does](#what-the-app-does)
 - [Architecture](#architecture)
@@ -20,7 +18,7 @@ This app **does not** send email — it only maintains the follow relationship.
 - [Environment variables](#environment-variables)
 - [Merchant setup steps (where to click)](#merchant-setup-steps-where-to-click)
 - [Testing](#testing)
-- [Shopify Flow integration](#shopify-flow-integration)
+- [Email notifications (Resend)](#email-notifications-resend)
 
 ## What the app does
 
@@ -30,7 +28,7 @@ This app **does not** send email — it only maintains the follow relationship.
 4. Maintains `Customer.custom.followed_artists`.
 5. Optional **notification bell**: shows followed artists and new products they published (see [Notification bell](#notification-bell)).
 
-Everything else (emails/notifications) is intentionally out of scope and left to Shopify Flow.
+6. **Email** followers when a product by an artist they follow goes live (see [Email notifications (Resend)](#email-notifications-resend)).
 
 ## Architecture
 
@@ -293,6 +291,7 @@ Set `application_url` / `app_proxy.url` to your production host, run `deploy`, a
 | `SHOPIFY_APP_URL` | Public app URL |
 | `SCOPES` | Access scopes (kept in sync with `shopify.app.toml`) |
 | `SHOP_CUSTOM_DOMAIN` | Optional custom shop domain |
+| `RESEND_*`, `EMAIL_*` | Email notifications — see [Email notifications (Resend)](#email-notifications-resend) |
 
 ## Merchant setup steps (where to click)
 
@@ -332,19 +331,45 @@ npm run typecheck
 npm run build
 ```
 
-## Shopify Flow integration
+## Email notifications (Resend)
 
-Intended future workflow (built in Flow, **not** in this app):
+When a product by an artist goes live, the app emails that artist's followers through [Resend](https://resend.com).
 
 ```
 Customer follows Artist
-   → Customer.custom.followed_artists updated
-Artist publishes a new product (Product.custom.artist = Artist)
-   → Flow finds customers whose followed_artists includes that Artist
-   → Flow sends them an email
+   → custom.followed_artists updated (source of truth, unchanged)
+   → customer tag follows-artist-{artist handle} added (lookup index)
+Product created/updated (webhook) and it is Active + on the Online Store + has custom.artist
+   → app finds customers tagged follows-artist-{handle}
+   → Resend sends one email per follower
+   → ProductEmailLog row stops that product from ever being announced twice
 ```
 
-Because follows live on a standard `custom` customer metafield, Flow can read them directly. This app is only responsible for keeping that metafield accurate.
+Why tags: Shopify can't search customers by metafield value, but it can search by tag. The tag is written after a successful follow/unfollow and never affects the follow response or the notification bell. Unrelated customer tags are never touched.
+
+Rules:
+
+- Only products whose Online Store `publishedAt` is within `EMAIL_MAX_PRODUCT_AGE_HOURS` (default 48) are announced, so editing an older product doesn't email everyone.
+- By default only followers **subscribed to email marketing** are emailed. Customers who unsubscribed are always skipped. Each email links to Shopify's marketing unsubscribe URL.
+
+Setup:
+
+1. Verify your domain in Resend and create an API key.
+2. Set the env vars below on the server and redeploy.
+3. Run `npm run deploy` so Shopify registers the `products/create` / `products/update` webhooks.
+4. Admin → **Artist Follow** → **Rebuild follow tags** (once, so customers who followed before this feature get their tags).
+5. **Send test email** to check Resend, then publish a product with `custom.artist` set.
+
+| Variable | Purpose |
+| --- | --- |
+| `RESEND_API_KEY` | Resend API key |
+| `RESEND_FROM_EMAIL` | Sender on the verified domain, e.g. `Collector <notify@collectorsme.com>` |
+| `EMAIL_NOTIFICATIONS_ENABLED` | Must be `true` to send anything (kill switch) |
+| `EMAIL_REQUIRE_MARKETING_CONSENT` | Set to `false` to also email followers who never subscribed |
+| `EMAIL_MAX_PRODUCT_AGE_HOURS` | Optional, default `48` |
+| `EMAIL_REPLY_TO` | Optional reply-to address |
+
+The same `follows-artist-{handle}` tags also work with Shopify Flow (Get customer data → `tag:follows-artist-…`) if you ever switch. Turn `EMAIL_NOTIFICATIONS_ENABLED` off first so customers don't get two emails.
 
 ---
 

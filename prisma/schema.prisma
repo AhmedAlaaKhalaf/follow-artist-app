@@ -33,3 +33,19 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+// One row per product whose followers were emailed, so webhook retries and
+// later product edits never send the same announcement twice.
+model ProductEmailLog {
+  id         Int      @id @default(autoincrement())
+  shop       String
+  productGid String
+  artistGid  String
+  status     String   @default("sending")
+  recipients Int      @default(0)
+  failed     Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([shop, productGid])
+}

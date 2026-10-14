@@ -7,6 +7,7 @@ import {
   resolveArtist,
   unfollowArtist,
 } from "./artist-follow.server";
+import { syncFollowTag } from "./artist-follow-tags.server";
 
 /**
  * Shared handler for POST /follow and POST /unfollow.
@@ -89,6 +90,13 @@ export async function handleFollowMutation(request, mode) {
       mode === "follow"
         ? await followArtist(admin, args)
         : await unfollowArtist(admin, args);
+
+    // Not awaited: tag sync must never delay or fail the follow response.
+    void syncFollowTag(admin, {
+      customerGid: args.customerGid,
+      artistHandle: artist.handle,
+      following: result.following,
+    });
 
     return json({ following: result.following });
   } catch (error) {

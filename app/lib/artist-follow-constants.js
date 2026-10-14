@@ -40,3 +40,14 @@ export const NOTIFICATIONS_DEFAULT_LOOKBACK_DAYS = 30;
 
 /** Storefront App Proxy base path (prefix + subpath from shopify.app.toml). */
 export const APP_PROXY_BASE = "/apps/artist-follow";
+
+/**
+ * Customer tags mirror `custom.followed_artists` so followers of an artist can
+ * be found with a customer search (metafield values are not searchable).
+ * The metafield stays the source of truth; tags are only a lookup index.
+ */
+export const FOLLOW_TAG_PREFIX = "follows-artist-";
+
+export function followTagForHandle(handle) {
+  return `${FOLLOW_TAG_PREFIX}${String(handle || "").trim().toLowerCase()}`;
+}

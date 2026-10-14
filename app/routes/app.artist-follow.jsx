@@ -12,6 +12,9 @@ import {
   APP_PROXY_BASE,
   CUSTOMER_METAFIELD,
 } from "../lib/artist-follow-constants";
+import { rebuildFollowTags } from "../lib/artist-follow-tags.server";
+import { recentProductEmails } from "../lib/artist-product-email.server";
+import { emailConfig, sendTestEmail } from "../lib/resend.server";
 
 const PROXY_PATH = APP_PROXY_BASE;
 
@@ -39,22 +42,88 @@ const EMPTY_STATUS = {
   },
 };
 
+async function loadEmailStatus(shop) {
+  const config = emailConfig();
+  let recent = [];
+  try {
+    recent = await recentProductEmails(shop);
+  } catch (error) {
+    console.error("[artist-email] could not load email log", { message: error?.message });
+  }
+  return {
+    enabled: config.enabled,
+    hasApiKey: config.hasApiKey,
+    from: config.from,
+    requireMarketingConsent: config.requireMarketingConsent,
+    recent: recent.map((r) => ({
+      id: r.id,
+      productGid: r.productGid,
+      status: r.status,
+      recipients: r.recipients,
+      failed: r.failed,
+      createdAt: r.createdAt.toISOString(),
+    })),
+  };
+}
+
+const SHOP_EMAIL_QUERY = `#graphql
+  query ArtistEmailShopContact { shop { email contactEmail } }
+`;
+
+async function handleEmailIntent(intent, admin) {
+  if (intent === "rebuild-tags") {
+    try {
+      const summary = await rebuildFollowTags(admin);
+      return {
+        emailAction: {
+          ok: true,
+          message: `Follow tags rebuilt: ${summary.customersScanned} customers scanned, ${summary.customersUpdated} updated (+${summary.tagsAdded} / -${summary.tagsRemoved} tags)${summary.failures ? `, ${summary.failures} failed` : ""}.`,
+        },
+      };
+    } catch (error) {
+      return { emailAction: { ok: false, message: describeError(error) } };
+    }
+  }
+
+  if (intent === "test-email") {
+    try {
+      const response = await admin.graphql(SHOP_EMAIL_QUERY);
+      const body = await response.json();
+      const to = body?.data?.shop?.contactEmail || body?.data?.shop?.email;
+      if (!to) {
+        return { emailAction: { ok: false, message: "The store has no contact email to send the test to." } };
+      }
+      return { emailAction: await sendTestEmail(to) };
+    } catch (error) {
+      return { emailAction: { ok: false, message: describeError(error) } };
+    }
+  }
+
+  return null;
+}
+
 export const loader = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  const email = await loadEmailStatus(session.shop);
   try {
     const status = await getConfigStatus(admin);
-    return { status, loadError: null };
+    return { status, loadError: null, email };
   } catch (error) {
     console.error("[artist-follow] admin loader error", {
       message: error?.message,
       details: error?.details,
     });
-    return { status: EMPTY_STATUS, loadError: describeError(error) };
+    return { status: EMPTY_STATUS, loadError: describeError(error), email };
   }
 };
 
 export const action = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
+
+  const formData = await request.formData();
+  const emailResult = await handleEmailIntent(formData.get("intent"), admin);
+  if (emailResult) return emailResult;
+
   try {
     const result = await runArtistFollowSetup(admin);
     const status = await getConfigStatus(admin);
@@ -101,7 +170,11 @@ function renderCheck(ok, label) {
 }
 
 export default function ArtistFollowSetup() {
-  const { status: initialStatus, loadError: initialLoadError } = useLoaderData();
+  const {
+    status: initialStatus,
+    loadError: initialLoadError,
+    email,
+  } = useLoaderData();
   const fetcher = useFetcher();
   const shopify = useAppBridge();
 
@@ -146,6 +219,19 @@ export default function ArtistFollowSetup() {
   }, [result, shopify]);
 
   const runSetup = () => fetcher.submit({}, { method: "POST" });
+
+  const emailFetcher = useFetcher();
+  const emailAction = emailFetcher.data?.emailAction;
+  const emailBusy = emailFetcher.state !== "idle";
+  const pendingIntent = emailBusy ? emailFetcher.formData?.get("intent") : null;
+
+  useEffect(() => {
+    if (!emailAction) return;
+    shopify.toast.show(emailAction.message, emailAction.ok ? undefined : { isError: true });
+  }, [emailAction, shopify]);
+
+  const runEmailIntent = (intent) =>
+    emailFetcher.submit({ intent }, { method: "POST" });
 
   return (
     <s-page heading="Artist Follow">
@@ -236,6 +322,62 @@ export default function ArtistFollowSetup() {
           </s-banner>
         </s-section>
       )}
+
+      <s-section heading="Email notifications (Resend)">
+        <s-stack direction="block" gap="base">
+          {renderCheck(email?.hasApiKey, "RESEND_API_KEY set")}
+          {renderCheck(
+            Boolean(email?.from),
+            `RESEND_FROM_EMAIL set${email?.from ? ` (${email.from})` : ""}`,
+          )}
+          {renderCheck(
+            email?.enabled,
+            "EMAIL_NOTIFICATIONS_ENABLED=true",
+          )}
+          <s-paragraph>
+            When a product with <s-text fontWeight="bold">custom.artist</s-text>{" "}
+            becomes Active on the Online Store, followers of that artist get one
+            email.{" "}
+            {email?.requireMarketingConsent
+              ? "Only customers subscribed to email marketing are emailed."
+              : "All followers are emailed except those who unsubscribed."}
+          </s-paragraph>
+          <s-stack direction="inline" gap="base">
+            <s-button
+              onClick={() => runEmailIntent("rebuild-tags")}
+              {...(pendingIntent === "rebuild-tags" ? { loading: true } : {})}
+              {...(emailBusy ? { disabled: true } : {})}
+            >
+              Rebuild follow tags
+            </s-button>
+            <s-button
+              variant="secondary"
+              onClick={() => runEmailIntent("test-email")}
+              {...(pendingIntent === "test-email" ? { loading: true } : {})}
+              {...(emailBusy ? { disabled: true } : {})}
+            >
+              Send test email
+            </s-button>
+          </s-stack>
+          {emailAction && (
+            <s-banner tone={emailAction.ok ? "success" : "critical"}>
+              <s-paragraph>{emailAction.message}</s-paragraph>
+            </s-banner>
+          )}
+          {email?.recent?.length > 0 && (
+            <s-stack direction="block" gap="tight">
+              <s-text fontWeight="bold">Recent announcements</s-text>
+              {email.recent.map((r) => (
+                <s-text key={r.id}>
+                  {new Date(r.createdAt).toLocaleString()} —{" "}
+                  {r.productGid.split("/").pop()} — {r.status}, {r.recipients} sent
+                  {r.failed ? `, ${r.failed} failed` : ""}
+                </s-text>
+              ))}
+            </s-stack>
+          )}
+        </s-stack>
+      </s-section>
 
       <s-section slot="aside" heading="What Run setup does">
         <s-stack direction="block" gap="tight">
