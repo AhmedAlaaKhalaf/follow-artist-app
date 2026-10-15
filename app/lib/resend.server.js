@@ -87,7 +87,7 @@ export function renderArtistProductEmail(data) {
 </html>`;
 
   const text = [
-    `${data.artistName} just released new work on ${data.shopName}.`,
+    `${data.artistName} just released new artwork on ${data.shopName}.`,
     "",
     data.productTitle,
     data.productUrl,
