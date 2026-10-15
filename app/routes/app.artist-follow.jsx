@@ -13,7 +13,11 @@ import {
   CUSTOMER_METAFIELD,
 } from "../lib/artist-follow-constants";
 import { rebuildFollowTags } from "../lib/artist-follow-tags.server";
-import { recentProductEmails } from "../lib/artist-product-email.server";
+import {
+  announceLatestProduct,
+  recentEmailEvents,
+  recentProductEmails,
+} from "../lib/artist-product-email.server";
 import { emailConfig, sendTestEmail } from "../lib/resend.server";
 
 const PROXY_PATH = APP_PROXY_BASE;
@@ -45,8 +49,12 @@ const EMPTY_STATUS = {
 async function loadEmailStatus(shop) {
   const config = emailConfig();
   let recent = [];
+  let events = [];
   try {
-    recent = await recentProductEmails(shop);
+    [recent, events] = await Promise.all([
+      recentProductEmails(shop),
+      recentEmailEvents(shop),
+    ]);
   } catch (error) {
     console.error("[artist-email] could not load email log", { message: error?.message });
   }
@@ -63,6 +71,14 @@ async function loadEmailStatus(shop) {
       failed: r.failed,
       createdAt: r.createdAt.toISOString(),
     })),
+    events: events.map((e) => ({
+      id: e.id,
+      productGid: e.productGid,
+      source: e.source,
+      outcome: e.outcome,
+      detail: e.detail,
+      createdAt: e.createdAt.toISOString(),
+    })),
   };
 }
 
@@ -70,7 +86,22 @@ const SHOP_EMAIL_QUERY = `#graphql
   query ArtistEmailShopContact { shop { email contactEmail } }
 `;
 
-async function handleEmailIntent(intent, admin) {
+async function handleEmailIntent(intent, admin, shop) {
+  if (intent === "announce-latest") {
+    try {
+      const result = await announceLatestProduct(admin, shop);
+      const ok = result.status === "sent";
+      return {
+        emailAction: {
+          ok,
+          message: result.detail || (ok ? "Announcement sent." : `Not sent: ${result.reason}.`),
+        },
+      };
+    } catch (error) {
+      return { emailAction: { ok: false, message: describeError(error) } };
+    }
+  }
+
   if (intent === "rebuild-tags") {
     try {
       const summary = await rebuildFollowTags(admin);
@@ -118,10 +149,10 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
 
   const formData = await request.formData();
-  const emailResult = await handleEmailIntent(formData.get("intent"), admin);
+  const emailResult = await handleEmailIntent(formData.get("intent"), admin, session.shop);
   if (emailResult) return emailResult;
 
   try {
@@ -358,6 +389,14 @@ export default function ArtistFollowSetup() {
             >
               Send test email
             </s-button>
+            <s-button
+              variant="secondary"
+              onClick={() => runEmailIntent("announce-latest")}
+              {...(pendingIntent === "announce-latest" ? { loading: true } : {})}
+              {...(emailBusy ? { disabled: true } : {})}
+            >
+              Announce latest product
+            </s-button>
           </s-stack>
           {emailAction && (
             <s-banner tone={emailAction.ok ? "success" : "critical"}>
@@ -376,6 +415,25 @@ export default function ArtistFollowSetup() {
               ))}
             </s-stack>
           )}
+          <s-stack direction="block" gap="tight">
+            <s-text fontWeight="bold">Email activity</s-text>
+            {email?.events?.length ? (
+              email.events.map((e) => (
+                <s-text key={e.id}>
+                  {new Date(e.createdAt).toLocaleString()} — product{" "}
+                  {e.productGid.split("/").pop() || "?"} ({e.source}) —{" "}
+                  {e.outcome}
+                  {e.detail ? `: ${e.detail}` : ""}
+                </s-text>
+              ))
+            ) : (
+              <s-text tone="subdued">
+                No product webhooks received yet. If you published a product
+                and nothing appears here, run npm run deploy so Shopify
+                registers the products/create and products/update webhooks.
+              </s-text>
+            )}
+          </s-stack>
         </s-stack>
       </s-section>
 

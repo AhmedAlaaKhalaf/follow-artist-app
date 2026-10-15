@@ -49,3 +49,17 @@ model ProductEmailLog {
 
   @@unique([shop, productGid])
 }
+
+// Recent product webhook / manual announcement outcomes, shown on the admin
+// page so skipped emails can be diagnosed without server logs.
+model EmailWebhookEvent {
+  id         Int      @id @default(autoincrement())
+  shop       String
+  productGid String
+  source     String
+  outcome    String
+  detail     String   @default("")
+  createdAt  DateTime @default(now())
+
+  @@index([shop, createdAt])
+}
