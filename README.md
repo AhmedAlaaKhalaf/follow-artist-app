@@ -357,8 +357,10 @@ Setup:
 1. Verify your domain in Resend and create an API key.
 2. Set the env vars below on the server and redeploy.
 3. Run `npm run deploy` so Shopify registers the `products/create` / `products/update` webhooks.
-4. Admin → **Artist Follow** → **Rebuild follow tags** (once, so customers who followed before this feature get their tags).
-5. **Send test email** to check Resend, then publish a product with `custom.artist` set.
+4. App → **Settings** → **Sync followers** (once, so customers who followed before this feature get their tags).
+5. **Send test email** to check Resend, then publish a product with `custom.artist` set. Sent announcements appear on the app's home page.
+
+Every product webhook outcome (sent or the reason it was skipped) is still stored in the `EmailWebhookEvent` table for troubleshooting, even though the admin UI no longer lists it.
 
 | Variable | Purpose |
 | --- | --- |

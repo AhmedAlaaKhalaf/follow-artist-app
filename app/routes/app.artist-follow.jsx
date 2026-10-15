@@ -7,78 +7,17 @@ import {
   getConfigStatus,
   runArtistFollowSetup,
 } from "../lib/artist-follow.server";
-import {
-  APP_ARTIST_METAOBJECT_TYPE,
-  APP_PROXY_BASE,
-  CUSTOMER_METAFIELD,
-} from "../lib/artist-follow-constants";
 import { rebuildFollowTags } from "../lib/artist-follow-tags.server";
-import {
-  announceLatestProduct,
-  recentEmailEvents,
-  recentProductEmails,
-} from "../lib/artist-product-email.server";
 import { emailConfig, sendTestEmail } from "../lib/resend.server";
+import { setupChecks } from "../lib/setup-checks";
 
-const PROXY_PATH = APP_PROXY_BASE;
-
-const EMPTY_STATUS = {
-  artistMetaobject: {
-    ok: false,
-    usingAppArtist: false,
-    optionsReady: false,
-    options: {},
-    expectedType: APP_ARTIST_METAOBJECT_TYPE,
-    definition: null,
-  },
-  productArtistMetafield: {
-    ok: false,
-    pointsAtAppArtist: false,
-    definition: null,
-  },
-  customerFollowedMetafield: {
-    exists: false,
-    ok: false,
-    typeMismatch: false,
-    pointsAtAppArtist: false,
-    actualType: null,
-    definition: null,
-  },
-};
-
-async function loadEmailStatus(shop) {
+function loadEmailSettings() {
   const config = emailConfig();
-  let recent = [];
-  let events = [];
-  try {
-    [recent, events] = await Promise.all([
-      recentProductEmails(shop),
-      recentEmailEvents(shop),
-    ]);
-  } catch (error) {
-    console.error("[artist-email] could not load email log", { message: error?.message });
-  }
   return {
     enabled: config.enabled,
     hasApiKey: config.hasApiKey,
     from: config.from,
     requireMarketingConsent: config.requireMarketingConsent,
-    recent: recent.map((r) => ({
-      id: r.id,
-      productGid: r.productGid,
-      status: r.status,
-      recipients: r.recipients,
-      failed: r.failed,
-      createdAt: r.createdAt.toISOString(),
-    })),
-    events: events.map((e) => ({
-      id: e.id,
-      productGid: e.productGid,
-      source: e.source,
-      outcome: e.outcome,
-      detail: e.detail,
-      createdAt: e.createdAt.toISOString(),
-    })),
   };
 }
 
@@ -86,33 +25,21 @@ const SHOP_EMAIL_QUERY = `#graphql
   query ArtistEmailShopContact { shop { email contactEmail } }
 `;
 
-async function handleEmailIntent(intent, admin, shop) {
-  if (intent === "announce-latest") {
-    try {
-      const result = await announceLatestProduct(admin, shop);
-      const ok = result.status === "sent";
-      return {
-        emailAction: {
-          ok,
-          message: result.detail || (ok ? "Announcement sent." : `Not sent: ${result.reason}.`),
-        },
-      };
-    } catch (error) {
-      return { emailAction: { ok: false, message: describeError(error) } };
-    }
-  }
-
-  if (intent === "rebuild-tags") {
+async function handleIntent(intent, admin) {
+  if (intent === "sync-followers") {
     try {
       const summary = await rebuildFollowTags(admin);
+      const changed = summary.customersUpdated;
       return {
-        emailAction: {
-          ok: true,
-          message: `Follow tags rebuilt: ${summary.customersScanned} customers scanned, ${summary.customersUpdated} updated (+${summary.tagsAdded} / -${summary.tagsRemoved} tags)${summary.failures ? `, ${summary.failures} failed` : ""}.`,
+        notice: {
+          ok: summary.failures === 0,
+          message: changed
+            ? `Followers synced. ${changed} customer${changed === 1 ? "" : "s"} updated.`
+            : "Followers are already up to date.",
         },
       };
     } catch (error) {
-      return { emailAction: { ok: false, message: describeError(error) } };
+      return { notice: { ok: false, message: describeError(error) } };
     }
   }
 
@@ -122,11 +49,12 @@ async function handleEmailIntent(intent, admin, shop) {
       const body = await response.json();
       const to = body?.data?.shop?.contactEmail || body?.data?.shop?.email;
       if (!to) {
-        return { emailAction: { ok: false, message: "The store has no contact email to send the test to." } };
+        return { notice: { ok: false, message: "Add a store contact email in Settings → General first." } };
       }
-      return { emailAction: await sendTestEmail(to) };
+      const result = await sendTestEmail(to);
+      return { notice: { ok: result.ok, message: result.message } };
     } catch (error) {
-      return { emailAction: { ok: false, message: describeError(error) } };
+      return { notice: { ok: false, message: describeError(error) } };
     }
   }
 
@@ -134,8 +62,8 @@ async function handleEmailIntent(intent, admin, shop) {
 }
 
 export const loader = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
-  const email = await loadEmailStatus(session.shop);
+  const { admin } = await authenticate.admin(request);
+  const email = loadEmailSettings();
   try {
     const status = await getConfigStatus(admin);
     return { status, loadError: null, email };
@@ -144,16 +72,16 @@ export const loader = async ({ request }) => {
       message: error?.message,
       details: error?.details,
     });
-    return { status: EMPTY_STATUS, loadError: describeError(error), email };
+    return { status: null, loadError: describeError(error), email };
   }
 };
 
 export const action = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
 
   const formData = await request.formData();
-  const emailResult = await handleEmailIntent(formData.get("intent"), admin, session.shop);
-  if (emailResult) return emailResult;
+  const intentResult = await handleIntent(formData.get("intent"), admin);
+  if (intentResult) return intentResult;
 
   try {
     const result = await runArtistFollowSetup(admin);
@@ -165,11 +93,11 @@ export const action = async ({ request }) => {
       details: error?.details,
       stack: error?.stack,
     });
-    let status = EMPTY_STATUS;
+    let status = null;
     try {
       status = await getConfigStatus(admin);
     } catch {
-      // keep EMPTY_STATUS
+      // keep null
     }
     return {
       result: {
@@ -188,271 +116,218 @@ function describeError(error) {
   if (Array.isArray(details) && details[0]?.message) {
     return details.map((d) => d.message).join("; ");
   }
-  return error?.message || "Unexpected error contacting the Shopify Admin API.";
+  return error?.message || "Something went wrong while contacting Shopify.";
 }
 
-function renderCheck(ok, label) {
+function renderStatusRow({ id, ok, label, description }) {
   return (
-    <s-stack direction="inline" gap="tight" alignItems="center">
-      <s-text tone={ok ? "success" : "critical"}>{ok ? "✓" : "✗"}</s-text>
-      <s-text>{label}</s-text>
+    <s-stack key={id} direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+      <s-stack direction="inline" gap="small-200" alignItems="center">
+        <s-icon
+          type={ok ? "check-circle-filled" : "alert-circle"}
+          tone={ok ? "success" : "critical"}
+        />
+        <s-stack direction="block" gap="small-500">
+          <s-text type="strong">{label}</s-text>
+          {description && <s-text color="subdued">{description}</s-text>}
+        </s-stack>
+      </s-stack>
     </s-stack>
   );
 }
 
-export default function ArtistFollowSetup() {
-  const {
-    status: initialStatus,
-    loadError: initialLoadError,
-    email,
-  } = useLoaderData();
-  const fetcher = useFetcher();
+function renderSettingRow(label, value) {
+  return (
+    <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+      <s-text color="subdued">{label}</s-text>
+      <s-text>{value}</s-text>
+    </s-stack>
+  );
+}
+
+export default function Settings() {
+  const { status: initialStatus, loadError: initialLoadError, email } =
+    useLoaderData();
+  const setupFetcher = useFetcher();
+  const toolsFetcher = useFetcher();
   const shopify = useAppBridge();
 
-  const status = fetcher.data?.status ?? initialStatus ?? EMPTY_STATUS;
-  const result = fetcher.data?.result;
-  const loadError = fetcher.data?.loadError ?? initialLoadError;
-  const isSubmitting = fetcher.state !== "idle";
+  const status = setupFetcher.data?.status ?? initialStatus;
+  const result = setupFetcher.data?.result;
+  const loadError = setupFetcher.data?.loadError ?? initialLoadError;
+  const settingUp = setupFetcher.state !== "idle";
 
-  const artistOk = Boolean(status.artistMetaobject?.ok);
-  const usingAppArtist = Boolean(status.artistMetaobject?.usingAppArtist);
-  const optionsReady = Boolean(status.artistMetaobject?.optionsReady);
-  const options = status.artistMetaobject?.options || {};
-  const productOk = Boolean(status.productArtistMetafield?.ok);
-  const productPointsAtApp = Boolean(
-    status.productArtistMetafield?.pointsAtAppArtist,
-  );
-  const customerOk = Boolean(status.customerFollowedMetafield?.ok);
-  const customerPointsAtApp = Boolean(
-    status.customerFollowedMetafield?.pointsAtAppArtist,
-  );
-  const typeMismatch = Boolean(status.customerFollowedMetafield?.typeMismatch);
-  const artistType =
-    status.artistMetaobject?.definition?.type || APP_ARTIST_METAOBJECT_TYPE;
-  const ready =
-    artistOk &&
-    usingAppArtist &&
-    optionsReady &&
-    productOk &&
-    productPointsAtApp &&
-    customerOk &&
-    customerPointsAtApp;
+  const { checks, ready } = setupChecks(status);
+  const typeMismatch = Boolean(status?.customerFollowedMetafield?.typeMismatch);
+
+  const notice = toolsFetcher.data?.notice;
+  const toolsBusy = toolsFetcher.state !== "idle";
+  const pendingIntent = toolsBusy ? toolsFetcher.formData?.get("intent") : null;
+
+  const emailConfigured = email.hasApiKey && Boolean(email.from);
+  const emailsOn = email.enabled && emailConfigured;
 
   useEffect(() => {
     if (!result) return;
-    if (result.status === "created" || result.status === "exists") {
-      shopify.toast.show(result.message || "Setup complete");
-    } else if (result.status === "error") {
-      shopify.toast.show(result.message || "Setup could not be completed", {
-        isError: true,
-      });
+    if (result.status === "error") {
+      shopify.toast.show(result.message || "Setup could not be completed", { isError: true });
+    } else {
+      shopify.toast.show("Setup complete");
     }
   }, [result, shopify]);
 
-  const runSetup = () => fetcher.submit({}, { method: "POST" });
-
-  const emailFetcher = useFetcher();
-  const emailAction = emailFetcher.data?.emailAction;
-  const emailBusy = emailFetcher.state !== "idle";
-  const pendingIntent = emailBusy ? emailFetcher.formData?.get("intent") : null;
-
   useEffect(() => {
-    if (!emailAction) return;
-    shopify.toast.show(emailAction.message, emailAction.ok ? undefined : { isError: true });
-  }, [emailAction, shopify]);
+    if (!notice) return;
+    shopify.toast.show(notice.message, notice.ok ? undefined : { isError: true });
+  }, [notice, shopify]);
 
-  const runEmailIntent = (intent) =>
-    emailFetcher.submit({ intent }, { method: "POST" });
+  const runSetup = () => setupFetcher.submit({}, { method: "POST" });
+  const runTool = (intent) => toolsFetcher.submit({ intent }, { method: "POST" });
 
   return (
-    <s-page heading="Artist Follow">
-      <s-button
-        slot="primary-action"
-        onClick={runSetup}
-        {...(isSubmitting ? { loading: true } : {})}
-        {...(ready ? { variant: "secondary" } : {})}
-      >
-        {ready ? "Re-check configuration" : "Run setup"}
-      </s-button>
-
+    <s-page heading="Settings">
       {loadError && (
-        <s-section heading="Could not load configuration">
-          <s-banner tone="critical">
-            <s-paragraph>{loadError}</s-paragraph>
-            <s-paragraph>
-              If you just changed the app&apos;s access scopes, reopen the app
-              and approve the new permissions.
-            </s-paragraph>
-          </s-banner>
-        </s-section>
-      )}
-
-      <s-section heading="Configuration">
-        <s-stack direction="block" gap="base">
-          {renderCheck(
-            artistOk && usingAppArtist,
-            `Artist metaobject (${artistType})`,
-          )}
-          {renderCheck(optionsReady, "Artist metaobject options enabled")}
-          {renderCheck(
-            productOk && productPointsAtApp,
-            "Product custom.artist → app Artist",
-          )}
-          {renderCheck(
-            customerOk && customerPointsAtApp,
-            "Customer custom.followed_artists → app Artist",
-          )}
-          {renderCheck(true, `App Proxy configured (${PROXY_PATH})`)}
-        </s-stack>
-
-        <s-box padding="base">
-          <s-badge tone={ready ? "success" : "attention"}>
-            Status: {ready ? "READY" : "ACTION NEEDED"}
-          </s-badge>
-        </s-box>
-      </s-section>
-
-      {usingAppArtist && !optionsReady && (
-        <s-section heading="Artist options">
-          <s-stack direction="block" gap="tight">
-            {renderCheck(options.publishable, "Active-draft status")}
-            {renderCheck(options.translatable, "Translations")}
-            {renderCheck(options.renderable, "Renderable / SEO")}
-            {renderCheck(options.onlineStore, "Publish as web pages (Online Store)")}
-            {renderCheck(options.storefront, "Storefronts API access")}
-          </s-stack>
+        <s-banner tone="critical" heading="Couldn't load your store settings">
+          <s-paragraph>{loadError}</s-paragraph>
           <s-paragraph>
-            Click <s-text fontWeight="bold">Run setup</s-text> to enable these.
-            Online Store pages will use URL handle{" "}
-            <s-text fontWeight="bold">/artists/…</s-text>.
+            If you recently updated the app, reopen it and approve any new
+            permissions.
           </s-paragraph>
-        </s-section>
+        </s-banner>
       )}
 
       {result?.status === "error" && (
-        <s-section heading="Setup error">
-          <s-banner tone="critical">
-            <s-paragraph>{result.message}</s-paragraph>
-          </s-banner>
-        </s-section>
+        <s-banner tone="critical" heading="Setup couldn't be completed">
+          <s-paragraph>{result.message}</s-paragraph>
+        </s-banner>
       )}
 
       {typeMismatch && (
-        <s-section heading="Configuration error">
-          <s-banner tone="critical">
-            <s-paragraph>
-              <s-text fontWeight="bold">custom.followed_artists</s-text> exists
-              with type{" "}
-              <s-text fontWeight="bold">
-                {status.customerFollowedMetafield.actualType}
-              </s-text>
-              , but this feature needs{" "}
-              <s-text fontWeight="bold">{CUSTOMER_METAFIELD.type}</s-text>.
-              Remove it in Settings → Custom data → Customers, then Run setup.
-            </s-paragraph>
-          </s-banner>
-        </s-section>
+        <s-banner tone="critical" heading="Conflicting customer field">
+          <s-paragraph>
+            Your store already has a customer field named &quot;Followed
+            artists&quot; with a different type. Delete it in Settings → Custom
+            data → Customers, then run setup again.
+          </s-paragraph>
+        </s-banner>
       )}
 
-      <s-section heading="Email notifications (Resend)">
+      <s-section heading="Store setup">
         <s-stack direction="block" gap="base">
-          {renderCheck(email?.hasApiKey, "RESEND_API_KEY set")}
-          {renderCheck(
-            Boolean(email?.from),
-            `RESEND_FROM_EMAIL set${email?.from ? ` (${email.from})` : ""}`,
-          )}
-          {renderCheck(
-            email?.enabled,
-            "EMAIL_NOTIFICATIONS_ENABLED=true",
-          )}
-          <s-paragraph>
-            When a product with <s-text fontWeight="bold">custom.artist</s-text>{" "}
-            becomes Active on the Online Store, followers of that artist get one
-            email.{" "}
-            {email?.requireMarketingConsent
-              ? "Only customers subscribed to email marketing are emailed."
-              : "All followers are emailed except those who unsubscribed."}
-          </s-paragraph>
+          <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+            <s-paragraph color="subdued">
+              Artist Follow needs a few store settings to save artists and
+              followers.
+            </s-paragraph>
+            <s-badge tone={ready ? "success" : "warning"}>
+              {ready ? "Ready" : "Action needed"}
+            </s-badge>
+          </s-stack>
+          <s-divider />
+          {checks.map(renderStatusRow)}
           <s-stack direction="inline" gap="base">
             <s-button
-              onClick={() => runEmailIntent("rebuild-tags")}
-              {...(pendingIntent === "rebuild-tags" ? { loading: true } : {})}
-              {...(emailBusy ? { disabled: true } : {})}
+              variant={ready ? "secondary" : "primary"}
+              onClick={runSetup}
+              {...(settingUp ? { loading: true } : {})}
             >
-              Rebuild follow tags
+              {ready ? "Check again" : "Run setup"}
             </s-button>
-            <s-button
-              variant="secondary"
-              onClick={() => runEmailIntent("test-email")}
-              {...(pendingIntent === "test-email" ? { loading: true } : {})}
-              {...(emailBusy ? { disabled: true } : {})}
-            >
-              Send test email
-            </s-button>
-            <s-button
-              variant="secondary"
-              onClick={() => runEmailIntent("announce-latest")}
-              {...(pendingIntent === "announce-latest" ? { loading: true } : {})}
-              {...(emailBusy ? { disabled: true } : {})}
-            >
-              Announce latest product
-            </s-button>
-          </s-stack>
-          {emailAction && (
-            <s-banner tone={emailAction.ok ? "success" : "critical"}>
-              <s-paragraph>{emailAction.message}</s-paragraph>
-            </s-banner>
-          )}
-          {email?.recent?.length > 0 && (
-            <s-stack direction="block" gap="tight">
-              <s-text fontWeight="bold">Recent announcements</s-text>
-              {email.recent.map((r) => (
-                <s-text key={r.id}>
-                  {new Date(r.createdAt).toLocaleString()} —{" "}
-                  {r.productGid.split("/").pop()} — {r.status}, {r.recipients} sent
-                  {r.failed ? `, ${r.failed} failed` : ""}
-                </s-text>
-              ))}
-            </s-stack>
-          )}
-          <s-stack direction="block" gap="tight">
-            <s-text fontWeight="bold">Email activity</s-text>
-            {email?.events?.length ? (
-              email.events.map((e) => (
-                <s-text key={e.id}>
-                  {new Date(e.createdAt).toLocaleString()} — product{" "}
-                  {e.productGid.split("/").pop() || "?"} ({e.source}) —{" "}
-                  {e.outcome}
-                  {e.detail ? `: ${e.detail}` : ""}
-                </s-text>
-              ))
-            ) : (
-              <s-text tone="subdued">
-                No product webhooks received yet. If you published a product
-                and nothing appears here, run npm run deploy so Shopify
-                registers the products/create and products/update webhooks.
-              </s-text>
-            )}
           </s-stack>
         </s-stack>
       </s-section>
 
-      <s-section slot="aside" heading="What Run setup does">
-        <s-stack direction="block" gap="tight">
-          <s-paragraph>
-            1. Creates/updates <s-text fontWeight="bold">{APP_ARTIST_METAOBJECT_TYPE}</s-text>{" "}
-            (name, image, bio, collection) and enables metaobject options
-            including Online Store pages.
+      <s-section heading="Email notifications">
+        <s-stack direction="block" gap="base">
+          <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+            <s-paragraph color="subdued">
+              Followers get an email when an artist they follow publishes a new
+              product.
+            </s-paragraph>
+            <s-badge tone={emailsOn ? "success" : "neutral"}>
+              {emailsOn ? "On" : "Off"}
+            </s-badge>
+          </s-stack>
+          <s-divider />
+          {renderSettingRow("Sender", email.from || "Not set")}
+          {renderSettingRow(
+            "Recipients",
+            email.requireMarketingConsent
+              ? "Followers subscribed to email marketing"
+              : "All followers, except unsubscribed",
+          )}
+          {!emailConfigured && (
+            <s-banner tone="info">
+              <s-paragraph>
+                Email sending isn&apos;t configured on the server yet. Add the
+                Resend API key and sender address to the app&apos;s environment
+                to turn on notifications.
+              </s-paragraph>
+            </s-banner>
+          )}
+          {emailConfigured && !email.enabled && (
+            <s-banner tone="info">
+              <s-paragraph>
+                Email sending is paused on the server. Set
+                EMAIL_NOTIFICATIONS_ENABLED to true to resume.
+              </s-paragraph>
+            </s-banner>
+          )}
+          <s-stack direction="inline" gap="base">
+            <s-button
+              variant="secondary"
+              icon="email"
+              onClick={() => runTool("test-email")}
+              {...(pendingIntent === "test-email" ? { loading: true } : {})}
+              {...(toolsBusy || !emailConfigured ? { disabled: true } : {})}
+            >
+              Send test email
+            </s-button>
+          </s-stack>
+        </s-stack>
+      </s-section>
+
+      <s-section heading="Followers">
+        <s-stack direction="block" gap="base">
+          <s-paragraph color="subdued">
+            Followers are kept in sync automatically. If you imported customers
+            or edited follows manually, sync them so they receive announcements.
           </s-paragraph>
-          <s-paragraph>
-            2. Creates Product <s-text fontWeight="bold">custom.artist</s-text>{" "}
-            pointing at that Artist (if missing).
-          </s-paragraph>
-          <s-paragraph>
-            3. Creates Customer{" "}
-            <s-text fontWeight="bold">custom.followed_artists</s-text> pointing
-            at that Artist (if missing).
-          </s-paragraph>
+          <s-stack direction="inline" gap="base">
+            <s-button
+              variant="secondary"
+              icon="refresh"
+              onClick={() => runTool("sync-followers")}
+              {...(pendingIntent === "sync-followers" ? { loading: true } : {})}
+              {...(toolsBusy ? { disabled: true } : {})}
+            >
+              Sync followers
+            </s-button>
+          </s-stack>
+        </s-stack>
+      </s-section>
+
+      <s-section slot="aside" heading="How it works">
+        <s-stack direction="block" gap="base">
+          <s-stack direction="inline" gap="small-200" alignItems="start">
+            <s-icon type="heart" tone="subdued" />
+            <s-paragraph>
+              Customers follow artists from the artist page on your store.
+            </s-paragraph>
+          </s-stack>
+          <s-stack direction="inline" gap="small-200" alignItems="start">
+            <s-icon type="notification" tone="subdued" />
+            <s-paragraph>
+              New products from followed artists appear in the storefront
+              notification bell.
+            </s-paragraph>
+          </s-stack>
+          <s-stack direction="inline" gap="small-200" alignItems="start">
+            <s-icon type="email" tone="subdued" />
+            <s-paragraph>
+              Followers get one email per new product, sent automatically.
+            </s-paragraph>
+          </s-stack>
         </s-stack>
       </s-section>
     </s-page>
