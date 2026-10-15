@@ -67,7 +67,7 @@ export default function App() {
           <span className={styles.stepIndex}>02</span>
           <h2 className={styles.stepTitle}>Publish</h2>
           <p className={styles.stepText}>
-            When an artist releases new work, followers are ready to see it.
+            When an artist releases new artwork, followers are ready to see it.
           </p>
         </div>
         <div className={styles.step}>

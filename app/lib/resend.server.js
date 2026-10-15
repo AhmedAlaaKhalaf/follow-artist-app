@@ -68,7 +68,7 @@ export function renderArtistProductEmail(data) {
         <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#fff;border-radius:8px;overflow:hidden;">
           <tr><td style="padding:24px 24px 8px;font-size:14px;color:#666;">${e.shopName}</td></tr>
           <tr><td style="padding:0 24px 16px;">
-            <h1 style="margin:0;font-size:22px;line-height:1.3;">${e.artistName} just released new work</h1>
+            <h1 style="margin:0;font-size:22px;line-height:1.3;">${e.artistName} just released new artwork</h1>
           </td></tr>
           ${data.imageUrl ? `<tr><td style="padding:0 24px;"><a href="${e.productUrl}"><img src="${e.imageUrl}" alt="${e.productTitle}" width="512" style="display:block;width:100%;height:auto;border-radius:6px;" /></a></td></tr>` : ""}
           <tr><td style="padding:16px 24px 8px;font-size:18px;font-weight:bold;">${e.productTitle}</td></tr>
