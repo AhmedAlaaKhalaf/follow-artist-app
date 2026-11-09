@@ -128,6 +128,7 @@ const METAOBJECT_DEFINITIONS_QUERY = `#graphql
           renderable { enabled }
           onlineStore { enabled data { urlHandle } }
         }
+        fieldDefinitions { key }
       }
     }
   }
@@ -146,6 +147,7 @@ const METAOBJECT_DEFINITION_BY_ID_QUERY = `#graphql
         renderable { enabled }
         onlineStore { enabled data { urlHandle } }
       }
+      fieldDefinitions { key }
     }
   }
 `;
@@ -193,6 +195,20 @@ function isAppArtistType(type) {
   const t = type.toLowerCase();
   // Exact app shorthand, or deployed form: app--<api_key>--artist
   return t === APP_ARTIST_METAOBJECT_TYPE || /^app--[a-f0-9]+--artist$/.test(t);
+}
+
+// Optional Artist fields added after the first release. Existing definitions
+// get them on the next "Run setup"; they stay optional so current entries
+// remain valid.
+const EXTRA_ARTIST_FIELDS = [
+  { key: "exhibitions", name: "Exhibitions", type: "multi_line_text_field", required: false },
+  { key: "collections", name: "Collections", type: "multi_line_text_field", required: false },
+  { key: "auctions", name: "Auctions", type: "multi_line_text_field", required: false },
+];
+
+function missingArtistFields(definition) {
+  const keys = new Set((definition?.fieldDefinitions ?? []).map((f) => f.key));
+  return EXTRA_ARTIST_FIELDS.filter((f) => !keys.has(f.key));
 }
 
 function artistOptionsSummary(definition) {
@@ -275,6 +291,8 @@ export async function getConfigStatus(admin) {
     options.renderable &&
     options.onlineStore &&
     options.storefront;
+  const fieldsReady =
+    Boolean(artistDefinition) && missingArtistFields(artistDefinition).length === 0;
 
   const productRefId = productArtist?.validations?.find(
     (v) => v.name === "metaobject_definition_id",
@@ -302,6 +320,7 @@ export async function getConfigStatus(admin) {
       ok: Boolean(artistDefinition),
       usingAppArtist,
       optionsReady,
+      fieldsReady,
       options,
       expectedType: APP_ARTIST_METAOBJECT_TYPE,
       definition: artistDefinition,
@@ -387,6 +406,7 @@ export async function ensureArtistMetaobjectDefinition(admin) {
           type: "collection_reference",
           required: true,
         },
+        ...EXTRA_ARTIST_FIELDS,
       ],
     };
 
@@ -404,14 +424,17 @@ export async function ensureArtistMetaobjectDefinition(admin) {
     return { status: "created", definition: result.metaobjectDefinition };
   }
 
-  // Exists — enable missing options (Online Store especially).
+  // Exists — enable missing options (Online Store especially) and add any
+  // fields introduced since the definition was created.
   const options = artistOptionsSummary(definition);
+  const missingFields = missingArtistFields(definition);
   if (
     options.publishable &&
     options.translatable &&
     options.renderable &&
     options.onlineStore &&
-    options.storefront
+    options.storefront &&
+    missingFields.length === 0
   ) {
     return { status: "exists", definition };
   }
@@ -424,6 +447,9 @@ export async function ensureArtistMetaobjectDefinition(admin) {
         storefront: "PUBLIC_READ",
       },
       capabilities: desiredCapabilities,
+      ...(missingFields.length
+        ? { fieldDefinitions: missingFields.map((field) => ({ create: field })) }
+        : {}),
     },
   });
   const result = data.metaobjectDefinitionUpdate;

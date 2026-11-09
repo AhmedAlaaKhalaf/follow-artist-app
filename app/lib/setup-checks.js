@@ -12,7 +12,7 @@ export function setupChecks(status) {
       id: "artist",
       label: "Artist profiles",
       description: "Artists your customers can follow.",
-      ok: Boolean(artist.ok && artist.usingAppArtist),
+      ok: Boolean(artist.ok && artist.usingAppArtist && artist.fieldsReady),
     },
     {
       id: "pages",
